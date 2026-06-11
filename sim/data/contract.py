@@ -36,6 +36,17 @@ STATE_KEYS_ORDERED = ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper
 STATE_DIMS = 25                # PENDING VERIFY.md hard-freeze (A2 Task 3)
 STATE_DTYPE = "float32"
 
+# A10 codex #2 fix (HIGH): per-key dim table.
+# 7+6+3+3+1=20 vs STATE_DIMS=25 (wrapper.py 注释) 的算术矛盾通过:
+#   gripper_pose 在 sim 端 tiled 6 次以匹配 wrapper.py 25D 分布
+#   (参 gello_replay.py:298 `np.full(6, gripper_scalar, dtype=np.float64)`)
+# 这里 STATE_KEY_DIMS 取 6 (非 1) 反映 sim 实际拼接行为, 同时让
+#   sum(STATE_KEY_DIMS) == STATE_DIMS, codex #2 的"true order verification"
+#   可基于 STATE_KEY_DIMS 做累计切片边界检查.
+STATE_KEY_DIMS = (7, 6, 3, 3, 6)   # tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper_pose(6) = 25
+# 实接注释: real-side 可能不同 (1D gripper scalar). sim 端 hardcode 6D tiled,
+#   real-side 兼容性由 A4 wrapper.py normalize 阶段处理.
+
 # Image spec (CHW)
 IMAGE_SHAPE = (3, 128, 128)
 IMAGE_DTYPE = "uint8"
@@ -87,6 +98,18 @@ PLUG_RZ_JITTER_RAD = 0.1     # ~5.7° around z axis
 
 # Default RNG seed (复现性, A8 单元测试用)
 RANDOMIZE_SEED_DEFAULT = 20260611
+
+# ===========================================================================
+# A7: plug insertion detection thresholds (align with mainline 8mm/2mm/5°)
+# ===========================================================================
+# Source of truth: ~/.planning/hil-serl-plug/evidence/sim-scene/insertion_detector.py
+#   - insertion_depth_threshold = 0.008 (8mm)
+#   - xy_tolerance              = 0.002 (2mm)
+#   - angle_tolerance_deg       = 5.0   (5°)
+# plug_reward_labeler.py 仍保留内部副本以避免 import 循环; contract 仅为 single-source documentation.
+INSERTION_DEPTH_THRESHOLD = 0.008   # 8mm — 深度阈值
+XY_TOLERANCE = 0.002               # 2mm — XY 对齐容差
+ANGLE_TOLERANCE_DEG = 5.0          # 5°  — 角度对齐容差
 
 # ===========================================================================
 # A9: failure scenario ranges

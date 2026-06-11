@@ -174,3 +174,103 @@ schema 正确性; 真实 image rendering / contact sensor 验证留给 mainline 
   - A10 正确 surface 出 schema 不一致 (FAIL on image_keys_complete)
   - 修复需 A9.1 plan 把 `pixels` 拆成 3-key (或者 A11 mock_real_pkl 阶段统一)
 - 3-key valid pkl (用 _gen_test_pkls.make_valid_pkl 产): 10/10 PASS exit 0 ✓
+
+## A11: gen_mock_real_pkl + test_domain_alignment (MOCK SMOKE ONLY)
+
+**Status:** A11-MOCK-SMOKE: PASS (schema smoke; NOT phase6-ready)
+
+**Codex 修复证据**:
+
+**Codex #6 (MED "A12 mock 阈值 > 50% 太弱")**:
+- A11 mock run 是 **schema/format smoke**, 不是 readiness
+- test_domain_alignment.py 的 "通过条件" = 脚本能 end-to-end 跑通 + 打印 report
+- 不做 accuracy-based 验证 (e.g. "state_range_overlap > 0.8" 不构成 readiness)
+- Real pkl + balanced fixture + confusion matrix (precision/recall ≥ 0.85 per ROADMAP)
+  = **phase6-ready gate**, 需要 user approval, 留待合并时实测
+
+**Tools 确认**（来自 `sim/scripts/`）:
+- `gen_mock_real_pkl.py` — CLI: `--output path --num-frames N --pos-ratio 0.8 --seed 20260611`
+  产 50-100 帧 mock real pkl (3 键 image + 25D state + 7D action + 80% pos_ratio)
+- `test_domain_alignment.py` — CLI: `--sim path/sim.pkl --real path/mock_real.pkl`
+  跑 image stats (mean/std) + state range overlap, 打印 report, exit 0 = smoke pass
+
+**Report 内容**:
+- `image_mean_sim`, `image_mean_real`: float (overall mean across 3 image keys)
+- `image_std_sim`, `image_std_real`: float
+- `state_range_overlap`: float ∈ [0, 1] (intersection / union of per-dim state ranges)
+- ⚠️ 这些数值是 **信息性**, 不作 readiness 判据
+
+**Test 报告**:
+- `python -m pytest sim/scripts/tests/test_gen_mock_real_pkl.py -v` → 4 passed
+- `python -m pytest sim/scripts/tests/test_domain_alignment.py -v` → 4 passed
+- CLI smoke: gen → verify → alignment 全跑通 exit 0
+
+**Phase6-ready 真要求 (per ROADMAP)**:
+- Real pkl (50%+ positive, 真实图像)
+- Balanced fixture (50/50 pos/neg)
+- Confusion matrix: precision ≥ 0.85, recall ≥ 0.85
+- User approval gate (per spec D11)
+- A11/A12 mock smoke 不构成此 readiness
+
+---
+
+## A12: test_mixed_training (mixed sim + mock real, SCHEMA SMOKE ONLY)
+
+**Status:** A12-MIXED-SMOKE: PASS (schema smoke; NOT phase6-ready)
+
+**Codex 修复证据**:
+
+**Codex #6 (MED "A12 mock 阈值 > 50% 太弱")**:
+- A12 通过条件 = **schema/format smoke**, NOT accuracy-based
+- "测试" = 脚本跑通 + 模型 fit (sklearn LogisticRegression) + 预测 emit, exit 0
+- 报告含 accuracy (∈ [0,1]) + baseline_accuracy (majority class) + confusion_matrix
+- **不**验证 accuracy ≥ 0.85 / precision ≥ 0.85 / recall ≥ 0.85
+- 80% pos baseline = 0.8 > 0.5 任何阈值; majority class baseline accuracy 报告是必须的
+
+**Codex #7 (HIGH "gsd-autonomous 启动缺 hard gate")**:
+- A12 完成 ≠ phase6-ready
+- `sim-code-ready` label 可在 A12 done 后打 (A1-A12 schema smoke 全 pass)
+- `phase6-ready` label 必须 user approval (per spec D11)
+- 本 plan **不**声明 phase6-ready
+
+**Tools 确认**（来自 `sim/scripts/test_mixed_training.py`）:
+- `load_features(sim_pkl, real_pkl) -> (X, y)`: 加载 pkl, 25D state features + rewards labels
+- `train_classifier(X, y) -> (model, X_test, y_test)`: sklearn LogisticRegression, 80/20 stratified split
+- `compute_report(y_true, y_pred) -> dict`: accuracy + baseline + confusion matrix
+- `print_report(report)`: stdout 打印
+- `main() -> int`: CLI entry, exit 0 (smoke pass)
+
+**Report 内容**:
+- `accuracy: float ∈ [0, 1]` (model on test set)
+- `baseline_accuracy: float ∈ [0, 1]` (majority class baseline = max(pos_ratio, 1-pos_ratio))
+- `confusion_matrix: [tn, fp, fn, tp]` (rows=true, cols=pred)
+- `n_test: int`
+- ⚠️ 这些数值是 **信息性**, 不作 readiness 判据
+
+**Test 报告**:
+- `python -m pytest sim/scripts/tests/test_mixed_training.py -v` → 6 passed
+- CLI smoke: A9 sim pkl + A11 mock real pkl → mixed training 跑通 exit 0
+
+---
+
+## sim-code-ready label (per spec D5b + D11)
+
+**`v2.1 sim-code-ready: PASS`** (2026-06-11)
+
+触发条件 (per spec 1.9):
+- ✅ A1-A10 全部 done (A8 domain randomization + A9 failure_scenario + A10 verify schema)
+- ✅ A11/A12 schema smoke pass
+- ✅ VERIFY.md 出现 "v2.1 sim-code-ready"
+
+**`phase6-ready: DEFERRED`** — 不在 sim fork 范围。
+
+**phase6-ready 真要求 (per ROADMAP Phase 6 退出判据)**:
+- Real pkl (50%+ positive, 真实图像)
+- Balanced fixture (50/50 pos/neg)
+- Confusion matrix: precision ≥ 0.85, recall ≥ 0.85
+- User approval gate (per spec D11)
+- A11/A12 mock smoke 不构成此 readiness
+
+接手 agent 第一步:
+1. 读 DESIGN.md / PROGRESS.md / VERIFY.md
+2. 决定: 继续未完成 plan (本 milestone 全部 done) / 申请 `phase6-ready` gate / 合并回主线
