@@ -68,24 +68,42 @@ else:
     HAS_ISAACLAB = False
 
 # ===========================================================================
-# Project imports
+# Project imports (tolerate missing fk_converter/normalize_action in CI/dev)
 # ===========================================================================
+# A4 deviation: wrap fk_converter / normalize_action imports in try/except.
+# /home/robot/... only exists on fr3-desktop-ts, so a vanilla dev box
+# cannot import this module otherwise — and that would block every
+# constant test below. Surfaces None on failure; the actual replay_*()
+# entry points then raise a clear error when invoked.
 GELLO_PIPELINE = "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline"
 for _p in [GELLO_PIPELINE]:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
-from fk_converter import trajectory_to_cartesian_deltas, trajectory_to_poses
-from normalize_action import normalize_action
+try:
+    from fk_converter import trajectory_to_cartesian_deltas, trajectory_to_poses
+    from normalize_action import normalize_action
+    _GELLO_PIPELINE_OK = True
+except ImportError as _e:
+    trajectory_to_cartesian_deltas = None
+    trajectory_to_poses = None
+    normalize_action = None
+    _GELLO_PIPELINE_OK = False
+    print(f"[WARN] gello_pipeline modules unavailable: {_e}")
 
 # ===========================================================================
-# Constants
+# A4: scale values come from sim/data/contract.py (single source of truth).
+# 旧 0.1 / 0.2 hardcode 是 pre-v2.1 spec 残留；A4 改用 contract.ACTION_SCALE.
 # ===========================================================================
+from sim.data.contract import ACTION_SCALE
+
+DEFAULT_POS_SCALE     = ACTION_SCALE[0]   # 0.015  (dx, dy, dz)
+DEFAULT_RPY_SCALE     = ACTION_SCALE[3]   # 0.1    (droll, dpitch, dyaw)
+DEFAULT_GRIPPER_SCALE = ACTION_SCALE[6]   # 1.0    (gripper)
+
 FRANKA_USD = "/home/robot/plug_insertion_sim/assets/panda_arm_hand.usd"
 FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
 
-DEFAULT_POS_SCALE = 0.1
-DEFAULT_RPY_SCALE = 0.2
 IMAGE_H, IMAGE_W, IMAGE_C = 128, 128, 3
 
 
@@ -299,7 +317,8 @@ def replay_in_sim(
 
     # 构建 transitions
     transitions = []
-    action_scale = [pos_scale, rpy_scale, 0.0]
+    # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
+    action_scale = list(ACTION_SCALE)
     start_time = time.time()
 
     for step in range(N):
@@ -390,7 +409,8 @@ def replay_pure_fk(
     print(f"\n[PURE FK] {N} frames")
     cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)
 
-    action_scale = [pos_scale, rpy_scale, 0.0]
+    # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
+    action_scale = list(ACTION_SCALE)
     states = np.zeros((N, 8), dtype=np.float32)
     states[:, :7] = joint_poses.astype(np.float32)
     states[:, 7] = gripper_states.astype(np.float32)
