@@ -12,8 +12,7 @@ Based on DROID's phase3_scene_preview.py structure:
 
 Usage (on fr3-desktop-ts):
 
-    # Show GUI, hold at home position
-    source /home/robot/miniconda3/bin/activate isaaclab
+    # NOTE: caller must have isaaclab conda env activated
     python3 plug_scene_preview.py --show-gui
 
     # Replay a GELLO demo trajectory in the GUI
@@ -72,10 +71,20 @@ for _p in [SCRIPT_DIR, SIM_DIR]:
 from plug_scene import PlugScene, FR3_HOME_JOINTS
 
 # --- FK converter for validation (optional) ---
+# Resolve FK scripts dir relative to this file so the path works on any
+# checkout, not just the fr3-desktop-ts layout. The repo's scripts/ dir
+# is the canonical location; if the on-disk layout diverges (e.g. the
+# gello_pipeline modules are vendored elsewhere) the user can extend
+# the candidate list.
+import pathlib
 HAS_FK = False
-FK_SCRIPTS = "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline"
-if os.path.isdir(FK_SCRIPTS) and FK_SCRIPTS not in sys.path:
-    sys.path.insert(0, FK_SCRIPTS)
+_FK_SCRIPT_DIRS = [
+    pathlib.Path(__file__).resolve().parent.parent.parent / "scripts" / "gello_pipeline",
+    pathlib.Path(__file__).resolve().parent.parent / "scripts" / "gello_pipeline",
+]
+for _d in _FK_SCRIPT_DIRS:
+    if _d.is_dir() and str(_d) not in sys.path:
+        sys.path.insert(0, str(_d))
 try:
     from fk_converter import forward_kinematics, trajectory_to_poses
     HAS_FK = True
