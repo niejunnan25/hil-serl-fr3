@@ -55,4 +55,17 @@
 - 新增: sim/data/tests/test_joint_names.py (5 tests: 3 zero-panda + 2 fr3-present)
 - L1 A5-scope gate: OK
 - L1 全 sim tree: 除 test_joint_names.py (字符串字面 assertion) 外零 panda_joint 残留
-- 下一步：A6 (USD 路径硬编码修复)
+- 下一步：A6 (USD 路径硬编码修复) / A4 (action_scale 对齐)
+
+### A4 完成 ✅
+- sim/data/gello_replay.py DEFAULT_POS_SCALE: 0.1→0.015
+- sim/data/gello_replay.py DEFAULT_RPY_SCALE: 0.2→0.1
+- sim/data/gello_replay.py 新增 DEFAULT_GRIPPER_SCALE: 1.0
+- 3 个常量改为从 sim.data.contract.ACTION_SCALE 派生 (single source of truth)
+- replay_in_sim / replay_pure_fk 内部 action_scale 从 3D [pos, rpy, 0.0] 改为 7D list(ACTION_SCALE)
+- L1 isolation gate (A4 范围内, 新文件 + diff): clean
+
+### A4 偏离 PLAN 的实现细节（README）
+1. **创建 sim/data/contract.py** — plan 假设 A2 Task 1 已经建好，但 A2 实际未跑。contract.py 内的 ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0) 按 spec 钉值，未 import experiments/scripts/droid（保持 L1 隔离）。
+2. **fk_converter / normalize_action imports 包装 try/except** — plan 未要求，但 gello_replay 在 vanilla dev / CI 上 import 会因 /home/robot/... 路径不存在而失败，导致所有常量测试因 ModuleNotFoundError 而非断言失败而 RED。包装后 surfaces None；replay_*() 入口在真正调用时再 raise 清晰错误。
+3. **A4 test 套 5 项全部 PASS**（plan 期望 22 passed 的 22 = contract 9 + state_25d 4 + image_aliases 4 + action_scale 5；后三项属 A2/A3 plan，A4 隔离执行时不在本分支上）。
