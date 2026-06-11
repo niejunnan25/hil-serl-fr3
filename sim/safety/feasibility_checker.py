@@ -59,7 +59,7 @@ class FeasibilityReport:
         return "FeasibilityReport: FAIL\n  " + "\n  ".join(str(v) for v in self.violations)
 
 
-# Hard limits from /home/robot/droid/config/fr3/franka_hardware_left.yaml (spec §2.5)
+# Hard limits from FR3 hardware spec (see franka_hardware_left.yaml in any FR3 deployment) — DO NOT import from real-side; sim port is self-contained per spec §6
 JOINT_POS_UPPER = np.array([2.80, 1.66, 2.80, -0.17, 2.80, 3.65, 2.80], dtype=np.float64)
 JOINT_POS_LOWER = np.array([-2.80, -1.66, -2.80, -2.97, -2.80, 0.08, -2.80], dtype=np.float64)
 JOINT_VEL_LIMIT = np.array([2.075, 2.075, 2.075, 2.075, 2.51, 2.51, 2.51], dtype=np.float64)

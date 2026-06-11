@@ -3,11 +3,14 @@
 Called by:
   1. scripts/sim/phase0_smoke.py before any Isaac Lab API call
   2. scripts/sim/phase1_replay_lerobot.py (Phase 1+)
-  3. droid.sim.standalone_runner.StandaloneSimRunner.__init__
+  3. any sim entry point that needs the safety gate
 
 The intent is enforcement of spec §5.1 constraint 8/12:
   sim 启动前必须 verify pgrep run_server.py / franka_panda_client / launch_robot 为空,
   以及 ss -ltn :4242/:50051/:50052 未监听.
+
+Prevents sim from starting while a real robot stack is running
+(portable check, not droid-specific).
 """
 from __future__ import annotations
 
