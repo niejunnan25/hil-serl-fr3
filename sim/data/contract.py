@@ -87,3 +87,29 @@ PLUG_RZ_JITTER_RAD = 0.1     # ~5.7° around z axis
 
 # Default RNG seed (复现性, A8 单元测试用)
 RANDOMIZE_SEED_DEFAULT = 20260611
+
+# ===========================================================================
+# A9: failure scenario ranges
+# ===========================================================================
+# 4 类失败: mis_alignment / angle_offset / insufficient_force / drop
+# 全部产出 reward=0 帧, 与 real positive 混合做 classifier training (A12)
+
+# (1) mis_alignment: plug 起始 xy 偏移量
+FAILURE_MISALIGNMENT_XY_M = 0.03     # 3 cm
+
+# (2) angle_offset:  z 轴旋转偏移
+FAILURE_ANGLE_OFFSET_DEG = 10.0
+
+# (3) insufficient_force: 最后 N 帧提前 close_gripper (action gripper = 1.0)
+FAILURE_INSUFFICIENT_FORCE_FRAMES = 10
+
+# (4) drop: 中段 release_gripper (action gripper = 0.0)
+FAILURE_DROP_FRAME_RATIO = 0.5       # 50% 中段帧 release
+
+# 4 类 class 名称 (字符串 enum)
+FAILURE_CLASSES = (
+    "mis_alignment", "angle_offset", "insufficient_force", "drop",
+)
+
+# 全部 failure 输出的 reward (与 real-side 1.0 区分)
+FAILURE_REWARD = 0.0
