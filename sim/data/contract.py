@@ -87,3 +87,41 @@ PLUG_RZ_JITTER_RAD = 0.1     # ~5.7° around z axis
 
 # Default RNG seed (复现性, A8 单元测试用)
 RANDOMIZE_SEED_DEFAULT = 20260611
+
+# ===========================================================================
+# A7: plug insertion detection thresholds (align with mainline 8mm/2mm/5°)
+# ===========================================================================
+# Source of truth: ~/.planning/hil-serl-plug/evidence/sim-scene/insertion_detector.py
+#   - insertion_depth_threshold = 0.008 (8mm)
+#   - xy_tolerance              = 0.002 (2mm)
+#   - angle_tolerance_deg       = 5.0   (5°)
+# plug_reward_labeler.py 仍保留内部副本以避免 import 循环; contract 仅为 single-source documentation.
+INSERTION_DEPTH_THRESHOLD = 0.008   # 8mm — 深度阈值
+XY_TOLERANCE = 0.002               # 2mm — XY 对齐容差
+ANGLE_TOLERANCE_DEG = 5.0          # 5°  — 角度对齐容差
+
+# ===========================================================================
+# A9: failure scenario ranges
+# ===========================================================================
+# 4 类失败: mis_alignment / angle_offset / insufficient_force / drop
+# 全部产出 reward=0 帧, 与 real positive 混合做 classifier training (A12)
+
+# (1) mis_alignment: plug 起始 xy 偏移量
+FAILURE_MISALIGNMENT_XY_M = 0.03     # 3 cm
+
+# (2) angle_offset:  z 轴旋转偏移
+FAILURE_ANGLE_OFFSET_DEG = 10.0
+
+# (3) insufficient_force: 最后 N 帧提前 close_gripper (action gripper = 1.0)
+FAILURE_INSUFFICIENT_FORCE_FRAMES = 10
+
+# (4) drop: 中段 release_gripper (action gripper = 0.0)
+FAILURE_DROP_FRAME_RATIO = 0.5       # 50% 中段帧 release
+
+# 4 类 class 名称 (字符串 enum)
+FAILURE_CLASSES = (
+    "mis_alignment", "angle_offset", "insufficient_force", "drop",
+)
+
+# 全部 failure 输出的 reward (与 real-side 1.0 区分)
+FAILURE_REWARD = 0.0
