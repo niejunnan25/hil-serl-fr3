@@ -121,3 +121,27 @@
 - 10 个 test 通过 (4 各自 produce pkl + 4 各自 schema + 1 4 类互不相同 + 1 generate_all)
 - L1 isolation gate: OK
 - 下一步：A10 (verify_sim_data.py) — 必须 assert 3 键 image schema + ordered state keys
+
+### A10 完成 ✅ (2026-06-11)
+- 新增 sim/scripts/verify_sim_data.py: sim pkl schema 验证 (3 键 image + ordered state + dtype/shape)
+- **Codex #1 (HIGH) 关闭**: assert 3 键 image schema (side_policy + wrist_1 + side_classifier);
+  missing-classifier pkl 测试 → image_keys_complete FAIL
+- **Codex #2 (MED) 关闭**:  使用 sim.data.contract.STATE_KEYS_ORDERED 验证 state 拼接顺序
+  (state_keys_ordered check), 不只 shape/dtype
+- CLI: python -m sim.scripts.verify_sim_data --pkl <path> → exit 0 = all pass, exit 1 = any fail
+- 9 个 test passed (valid/missing/state/action/image/transition keys/CLI/state-keys-order)
+- L1 isolation gate: OK (verify_sim_data.py 只 import sim.data.contract + numpy, 无 real-side 引用)
+- **sim-code-ready label: PENDING** (A11/A12 schema smoke 完成后一起打)
+- 下一步：A11 (test_domain_alignment.py + gen_mock_real_pkl.py) — schema smoke only
+
+**Task 2 CLI smoke 结果**:
+- 3-key valid pkl (测试 helper 生成): 10/10 PASS, exit 0
+- missing-classifier pkl: image_keys_complete FAIL, exit 1 ✓ (codex #1 fix 验证)
+- A9 failure_scenario_generator 产 4 pkl: schema 不匹配 (A9 用单 `pixels` 键, 不用 3-key 拆分 schema)
+  — A10 正确 surface 出此 schema 不一致; 修复需 A9 后续 plan 把 `pixels` 拆成 `side_policy`+`wrist_1`+`side_classifier`
+  (A11 mock_real_pkl 需产 3-key 拆分 schema, A12 mixed training 可用 A10 验证)
+
+**pre-existing 失败** (非 A10 引入):
+- sim/data/tests/test_contract.py: 3 tests 引用 INSERTION_DEPTH_THRESHOLD/XY_TOLERANCE/ANGLE_TOLERANCE_DEG
+  但 A8 merge 改写 contract.py 时丢失了 A7 的 threshold 常量; main repo 也同样 3 failed
+- A10 scope 不动 contract.py (L1 隔离 + A9 已加); 此 3 failure 需后续 A8.1 / A7.1 fix
