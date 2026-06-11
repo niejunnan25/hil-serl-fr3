@@ -101,3 +101,76 @@ env (mainline agent) 验证; **本 plan 验证的是** 纯函数返回值在 con
 
 **Runtime test 推迟到 desktop env**: pkl 内容是 25D state + 7D action + placeholder image 的
 schema 正确性; 真实 image rendering / contact sensor 验证留给 mainline agent。
+
+---
+
+## A10: verify_sim_data.py (sim pkl schema validator)
+
+**Status:** A10-VERIFY-SCHEMA: PASS (sim-code-ready; NOT phase6-ready)
+
+**Codex 修复证据**:
+
+**Codex #1 (HIGH "side_classifier key 不一致")**:
+- A10 强制 assert 3 键 image schema: `side_policy` + `wrist_1` + `side_classifier`
+- 来源: `sim/data/contract.VALID_PKL_IMAGE_KEYS = ("side_policy", "wrist_1", "side_classifier")`
+- 测试: `test_missing_classifier_pkl_fails_image_keys_check` — 故意缺 side_classifier 的 pkl
+  → `image_keys_complete = False`, exit code = 1
+- 实测: `python -m sim.scripts.verify_sim_data --pkl /tmp/missing_classifier.pkl` → exit 1, FAIL 报告
+- `verify_image_keys_complete(obs_dict)` 显式 `set(obs_dict.keys()) - {"state"} == set(VALID_PKL_IMAGE_KEYS)`,
+  多/少 1 键都 fail
+
+**Codex #2 (MED "25D 算式 7+6+3+3+1=20≠25")**:
+- A10 使用 `sim.data.contract.STATE_KEYS_ORDERED` 验证 state 拼接顺序
+- 函数 `verify_state_keys_order(state_vector)` 检查:
+  - shape = (STATE_DIMS,) = (25,)
+  - dtype = float32
+  - 拼接顺序 = STATE_KEYS_ORDERED = ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
+  - STATE_KEYS_ORDERED 长度 = 5 (5 个 sub-key 拼接)
+  - STATE_KEYS_ORDERED 每个 key 非空字符串
+- Arith 矛盾 (20 vs 25) 保留在 contract.py docstring 与 VERIFY.md A2 段;
+  本函数只验"顺序"语义层, 不参与 arith 校验
+
+**Checks 列表** (verify_pkl 返回的 dict):
+- `not_empty`: pkl 至少 1 transition
+- `transition_keys_complete`: 全部 TRANSITION_KEYS 键
+- `image_keys_complete`: 3 键 image schema (codex #1 fix)
+- `image_shape_correct`: IMAGE_SHAPE = (3, 128, 128)
+- `image_dtype_correct`: IMAGE_DTYPE = uint8
+- `state_keys_ordered`: state shape + dtype + order 正确 (codex #2 fix)
+- `state_shape_correct`: state shape = (25,)
+- `state_dtype_correct`: state dtype = float32
+- `action_shape_correct`: action shape = (7,)
+- `action_dtype_correct`: action dtype = float32
+
+**Test 报告**:
+- `python -m pytest sim/scripts/tests/test_verify_sim_data.py -v` → 9 passed
+  - 1 valid pkl: all 10 checks pass
+  - 1 missing-classifier pkl: image_keys_complete FAIL (codex #1 fix 验证)
+  - 4 individual check (state / action / image / transition keys)
+  - 1 state_keys_order_check_uses_state_keys_ordered (monkeypatch 验)
+  - 2 CLI smoke (valid → exit 0, missing → exit 1)
+- CLI smoke: 3-key valid pkl → 10/10 PASS exit 0; missing-classifier pkl → exit 1 FAIL ✓
+
+**L1 isolation gate**: OK (verify_sim_data.py 只 import sim.data.contract + numpy, 无 real-side 引用)
+- 验证命令: `grep -rE "panda_joint|/home/robot|droid\.sim|from droid|import droid|EnvConfig|franka_env|from scripts|import scripts" sim/scripts/` → 0 match, OK
+
+**sim-code-ready vs phase6-ready (Codex #5 修复)**:
+- A10 完成 = **sim-code-ready** 的必要条件 (A1-A10 全 done + schema smoke pass)
+- **不是** phase6-ready: phase6-ready 需要 real pkl + ROADMAP precision/recall ≥ 0.85
+- 接手 agent: A11/A12 schema smoke pass 后打 `sim-code-ready` 标签; `phase6-ready` 必须
+  用户合并时实测, 不在本 fork 范围
+
+**A11 影响**: A11 的 `gen_mock_real_pkl.py` 必须产符合 3 键 image schema 的 pkl (用 A10 验证)
+
+**Pre-existing failures (非 A10 引入)**:
+- `sim/data/tests/test_contract.py`: 3 tests fail (INSERTION_DEPTH_THRESHOLD/XY_TOLERANCE/ANGLE_TOLERANCE_DEG)
+- 原因: A8 merge 改写 contract.py 时丢失 A7 加的 threshold 常量; main repo 也同样 fail
+- A10 scope 不动 contract.py (L1 隔离 + A9 已在 contract.py 加 FAILURE_* 常量, 不再扩展)
+- 修复需后续 A7.1/A8.1 plan 显式加回 threshold 常量
+
+**CLI smoke on A9 output (Task 2 结果)**:
+- A9 `failure_scenario_generator` 产 4 pkl (mis_alignment/angle_offset/insufficient_force/drop):
+  - schema 不匹配: A9 用单 `pixels` 键占位图像, 不用 3-key 拆分
+  - A10 正确 surface 出 schema 不一致 (FAIL on image_keys_complete)
+  - 修复需 A9.1 plan 把 `pixels` 拆成 3-key (或者 A11 mock_real_pkl 阶段统一)
+- 3-key valid pkl (用 _gen_test_pkls.make_valid_pkl 产): 10/10 PASS exit 0 ✓
