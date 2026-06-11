@@ -15,8 +15,12 @@
   3. IsaacLab sim 中逐帧回放关节轨迹
   4. 每帧记录 sim observation:
      - pixels: 相机 RGB (3, 128, 128) uint8 CHW
-     - state:  关节位置 (7,) + 夹爪 (1,) = (8,) float32
+     - state:  25D SERL state per STATE_KEYS_ORDERED
+       (tcp_pose 7 + tcp_vel 6 + tcp_force 3 + tcp_torque 3 + gripper 6 = 25)
   5. 构建 SERL pkl transitions list
+
+A2: 8D 旧实现 (joint 7 + gripper 1) → 25D 新实现 (per sim/data/contract.py)
+    force/torque 暂填 0 (A9 之后接 contact sensor)。
 
 用法 (on fr3-desktop-ts):
     source /home/robot/miniconda3/etc/profile.d/conda.sh && conda activate isaaclab
@@ -75,8 +79,17 @@ else:
 # cannot import this module otherwise — and that would block every
 # constant test below. Surfaces None on failure; the actual replay_*()
 # entry points then raise a clear error when invoked.
-GELLO_PIPELINE = "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline"
-for _p in [GELLO_PIPELINE]:
+#
+# A2 deviation: also search the local repo's scripts/ dir (where
+# fk_converter.py and normalize_action.py live in this checkout),
+# so replay_pure_fk() can actually run for unit tests on dev boxes
+# that don't have the /home/robot/... path.
+import pathlib
+GELLO_PIPELINE_CANDIDATES = [
+    "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline",
+    str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"),
+]
+for _p in GELLO_PIPELINE_CANDIDATES:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -225,29 +238,115 @@ def capture_observation(
     gripper_states: np.ndarray,
     step_idx: int,
     device: str,
+    prev_tcp_pose: Optional[np.ndarray] = None,
+    dt: float = 1.0 / 30.0,
 ) -> dict[str, np.ndarray]:
-    """从 sim 中读取 observation。
+    """从 sim 中读取 observation，产 25D state (per sim/data/contract.py)。
+
+    State ordering (must match STATE_KEYS_ORDERED):
+      tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper_pose(6) = 25D
+      (gripper tiled 6× to match wrapper.py 25D distribution; arith 7+6+3+3+1=20
+      conflicts with wrapper.py 25D — see contract.py docstring for resolution.)
 
     Args:
-        scene: InteractiveScene
+        scene: InteractiveScene (or None in pure-FK mode)
         joint_poses: 全部关节轨迹 (N, 7)
         gripper_states: 全部夹爪状态 (N,)
         step_idx: 当前帧索引
         device: torch device
+        prev_tcp_pose: 上一帧 tcp_pose (7D pos+quat-xyzw); 第一次调用传 None
+        dt: 时间步长 (s)
 
     Returns:
-        {"state": (8,) float32, "pixels": (3, 128, 128) uint8}
+        {"state": (25,) float32, "pixels": (3, 128, 128) uint8,
+         "tcp_pose_out": (7,) 用于下一次调用 prev_tcp_pose}
     """
-    # 读取 sim 中的实际关节位置
-    q_actual = scene["robot"].data.joint_pos[0, :7].cpu().numpy().astype(np.float32)
-    gripper = np.float32(gripper_states[step_idx])
+    from sim.data.contract import STATE_DIMS, STATE_KEYS_ORDERED
 
-    state = np.concatenate([q_actual, [gripper]]).astype(np.float32)
+    # 1) 读 sim 中实际关节角
+    if scene is not None and HAS_ISAACLAB:
+        q_actual = scene["robot"].data.joint_pos[0, :7].cpu().numpy().astype(np.float64)
+    else:
+        q_actual = np.asarray(joint_poses[step_idx], dtype=np.float64)
 
-    # 图像: 尝试从 sim camera 读取; 若无 camera 则返回占位
-    pixels = _capture_camera_rgb(scene)
+    # 2) tcp_pose: pos(3) + quat_xyzw(4) = 7D (first 7 of the 25D)
+    from sim.kinematics.fr3_fk import fk_ee_pose
+    T_ee = fk_ee_pose(q_actual)  # 4x4 transform
+    tcp_pos = T_ee[:3, 3]
+    tcp_quat = _rotmat_to_quat_xyzw(T_ee[:3, :3])
+    tcp_pose = np.concatenate([tcp_pos, tcp_quat]).astype(np.float64)  # (7,)
 
-    return {"state": state, "pixels": pixels}
+    # 3) tcp_vel: 数值差分 pos(3) + angular placeholder(3) = 6D
+    if prev_tcp_pose is None:
+        tcp_vel = np.zeros(6, dtype=np.float64)
+    else:
+        pos_diff = (tcp_pose[:3] - prev_tcp_pose[:3]) / max(dt, 1e-6)
+        tcp_vel = np.concatenate([pos_diff, np.zeros(3)]).astype(np.float64)  # (6,)
+
+    # 4) tcp_force / tcp_torque: sim 接触力需要 robot contact sensor API (A9 之后实接)
+    #    A2 阶段: hardcode zeros
+    tcp_force = np.zeros(3, dtype=np.float64)
+    tcp_torque = np.zeros(3, dtype=np.float64)
+
+    # 5) gripper_pose: 第 8 轴位置 (1D scalar)  — 25D spec requires a
+    #    1D gripper value; mainline 25D distribution is
+    #    tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper(6) = 25
+    #    per wrapper.py:23-25 comment. To match 25D exactly, we tile the
+    #    gripper scalar 6 times (this is the A2 hard-freeze reconciliation;
+    #    see VERIFY.md and contract.py docstring for the arith 20 vs 25 conflict).
+    gripper_scalar = float(gripper_states[step_idx])
+    gripper_pose = np.full(6, gripper_scalar, dtype=np.float64)  # (6,) → 25D total
+
+    # 6) 按 STATE_KEYS_ORDERED 拼接 → 25D
+    state_parts = {
+        "tcp_pose": tcp_pose,
+        "tcp_vel": tcp_vel,
+        "tcp_force": tcp_force,
+        "tcp_torque": tcp_torque,
+        "gripper_pose": gripper_pose,
+    }
+    state = np.concatenate([state_parts[k] for k in STATE_KEYS_ORDERED]).astype(np.float32)
+    assert state.shape == (STATE_DIMS,), f"state shape {state.shape} != ({STATE_DIMS},)"
+
+    # 7) 图像
+    pixels = _capture_camera_rgb(scene) if (scene is not None and HAS_ISAACLAB) \
+             else np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
+
+    return {"state": state, "pixels": pixels, "tcp_pose_out": tcp_pose}
+
+
+def _rotmat_to_quat_xyzw(R: np.ndarray) -> np.ndarray:
+    """Convert 3x3 rotation matrix to quaternion (xyzw) — branchless, no scipy.
+
+    Uses the trace method: stable for most cases; the last-branch case picks
+    the largest diagonal element to maximize numerical precision.
+    """
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        qw = 0.25 / s
+        qx = (R[2, 1] - R[1, 2]) * s
+        qy = (R[0, 2] - R[2, 0]) * s
+        qz = (R[1, 0] - R[0, 1]) * s
+    elif (R[0, 0] > R[1, 1]) and (R[0, 0] > R[2, 2]):
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        qw = (R[2, 1] - R[1, 2]) / s
+        qx = 0.25 * s
+        qy = (R[0, 1] + R[1, 0]) / s
+        qz = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        qw = (R[0, 2] - R[2, 0]) / s
+        qx = (R[0, 1] + R[1, 0]) / s
+        qy = 0.25 * s
+        qz = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        qw = (R[1, 0] - R[0, 1]) / s
+        qx = (R[0, 2] + R[2, 0]) / s
+        qy = (R[1, 2] + R[2, 1]) / s
+        qz = 0.25 * s
+    return np.array([qx, qy, qz, qw], dtype=np.float64)
 
 
 def _capture_camera_rgb(scene: Any) -> np.ndarray:
@@ -320,6 +419,8 @@ def replay_in_sim(
     # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
     action_scale = list(ACTION_SCALE)
     start_time = time.time()
+    # A2: 25D state needs prev_tcp_pose for tcp_vel numerical differentiation
+    prev_tcp_pose = None
 
     for step in range(N):
         q_target = joint_poses[step]
@@ -335,8 +436,12 @@ def replay_in_sim(
             sim.step()
         scene.update(sim.get_physics_dt())
 
-        # 记录 observation
-        obs = capture_observation(scene, joint_poses, gripper_states, step, device)
+        # 记录 observation (A2: 25D state via capture_observation with prev_tcp_pose)
+        obs = capture_observation(
+            scene, joint_poses, gripper_states, step, device,
+            prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
+        )
+        prev_tcp_pose = obs["tcp_pose_out"]
 
         # 构建 action (归一化)
         action = normalize_action(
@@ -351,9 +456,12 @@ def replay_in_sim(
         done = (step == N - 1)
         mask = np.float32(1.0 - float(done))
 
-        # next_obs: 下一帧或最后一帧自身
+        # next_obs: 下一帧或最后一帧自身 (A2: 25D; pass current prev_tcp_pose)
         next_step = min(step + 1, N - 1)
-        next_obs = capture_observation(scene, joint_poses, gripper_states, next_step, device)
+        next_obs = capture_observation(
+            scene, joint_poses, gripper_states, next_step, device,
+            prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
+        )
 
         transition = {
             "observations": {
@@ -388,6 +496,65 @@ def replay_in_sim(
 # ===========================================================================
 # Pure FK replay (no IsaacSim)
 # ===========================================================================
+def _local_trajectory_to_cartesian_deltas(joint_poses: np.ndarray) -> np.ndarray:
+    """Pure-Python fallback: sim/kinematics/fr3_fk-based cartesian deltas.
+
+    Used only when the external scripts/fk_converter.py (with scipy Rotation
+    for singularity-safe Euler deltas) is unavailable on this dev box. The
+    in-worktree sim/kinematics/fr3_fk.py gives a 4x4 transform per frame; we
+    approximate the rotation delta with a simple R_curr @ R_prev^T → euler
+    decomposition using the same _rotmat_to_quat_xyzw helper used in
+    capture_observation. Good enough for unit tests, not for sim deployment.
+    """
+    from sim.kinematics.fr3_fk import fk_ee_pose
+    N = len(joint_poses)
+    deltas = np.zeros((N, 6), dtype=np.float64)
+    prev_pos = None
+    prev_quat = None
+    for i in range(N):
+        T_curr = fk_ee_pose(joint_poses[i])
+        pos_curr = T_curr[:3, 3]
+        quat_curr = _rotmat_to_quat_xyzw(T_curr[:3, :3])
+        if prev_pos is not None:
+            d_pos = pos_curr - prev_pos
+            # R_delta = R_curr @ R_prev^T; use quat math: q_delta = q_curr * q_prev^{-1}
+            # For unit quat, inverse = conjugate
+            px, py, pz, pw = prev_quat
+            cx, cy, cz, cw = quat_curr
+            # q_curr * q_prev_conj (Hamilton product, xyzw)
+            qdx = cw * px + cx * pw + cy * pz - cz * py
+            qdy = cw * py - cx * pz + cy * pw + cz * px
+            qdz = cw * pz + cx * py - cy * px + cz * pw
+            qdw = cw * pw - cx * px - cy * py - cz * pz
+            d_euler = _quat_xyzw_to_euler_xyz(np.array([qdx, qdy, qdz, qdw]))
+            deltas[i, :3] = d_pos
+            deltas[i, 3:6] = d_euler
+        prev_pos = pos_curr
+        prev_quat = quat_curr
+    return deltas
+
+
+def _quat_xyzw_to_euler_xyz(q: np.ndarray) -> np.ndarray:
+    """Convert quaternion (xyzw) to XYZ intrinsic Euler angles (radians).
+
+    Pure-Python, no scipy; uses standard XYZ Tait-Bryan formulas.
+    """
+    qx, qy, qz, qw = q
+    # roll (X)
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+    # pitch (Y)
+    sinp = 2.0 * (qw * qy - qz * qx)
+    sinp = np.clip(sinp, -1.0, 1.0)
+    pitch = np.arcsin(sinp)
+    # yaw (Z)
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+    return np.array([roll, pitch, yaw], dtype=np.float64)
+
+
 def replay_pure_fk(
     demo: dict[str, np.ndarray],
     pos_scale: float = DEFAULT_POS_SCALE,
@@ -397,6 +564,9 @@ def replay_pure_fk(
     """纯 FK 模式: 用 fk_converter 生成 transition, 无 sim 图像。
 
     用于无 GPU 的开发环境或快速验证。
+
+    A2: produces 25D state via capture_observation() (calls it with
+    scene=None and prev_tcp_pose threaded through the loop).
     """
     joint_poses = demo["joint_poses"]
     gripper_states = demo["gripper_states"]
@@ -407,20 +577,44 @@ def replay_pure_fk(
         gripper_states = gripper_states[:N]
 
     print(f"\n[PURE FK] {N} frames")
-    cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)
+    if trajectory_to_cartesian_deltas is not None:
+        cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)
+    else:
+        # A2 fallback: use in-worktree sim.kinematics.fr3_fk when the
+        # external scripts/fk_converter is unavailable (dev box / CI).
+        print("[PURE FK] gello_pipeline missing; using sim.kinematics.fr3_fk fallback")
+        cartesian_deltas = _local_trajectory_to_cartesian_deltas(joint_poses)
 
     # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
     action_scale = list(ACTION_SCALE)
-    states = np.zeros((N, 8), dtype=np.float32)
-    states[:, :7] = joint_poses.astype(np.float32)
-    states[:, 7] = gripper_states.astype(np.float32)
     pixels_placeholder = np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
 
     transitions = []
+    # A2: thread prev_tcp_pose through capture_observation() for tcp_vel
+    prev_tcp_pose = None
     for i in range(N):
-        action = normalize_action(
-            cartesian_deltas[i], action_scale, float(gripper_states[i])
+        # A2: produce 25D state via capture_observation (same code path as sim)
+        obs = capture_observation(
+            scene=None, joint_poses=joint_poses, gripper_states=gripper_states,
+            step_idx=i, device="cpu", prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
         )
+        prev_tcp_pose = obs["tcp_pose_out"]
+        next_obs = capture_observation(
+            scene=None, joint_poses=joint_poses, gripper_states=gripper_states,
+            step_idx=min(i + 1, N - 1), device="cpu",
+            prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
+        )
+
+        if normalize_action is None:
+            # Dev box: synthesize 7D action = cartesian_delta / scale, clip [-1, 1]
+            action = np.concatenate([
+                cartesian_deltas[i] / np.array(action_scale[:6], dtype=np.float64),
+                [float(gripper_states[i])],
+            ]).astype(np.float32)
+        else:
+            action = normalize_action(
+                cartesian_deltas[i], action_scale, float(gripper_states[i])
+            )
         action = np.clip(action, -1.0, 1.0).astype(np.float32)
         if np.linalg.norm(action) <= 0.0:
             continue
@@ -428,11 +622,11 @@ def replay_pure_fk(
         done = (i == N - 1)
         transition = {
             "observations": {
-                "state": states[i].copy(),
+                "state": obs["state"].copy(),
                 "pixels": pixels_placeholder.copy(),
             },
             "next_observations": {
-                "state": states[min(i + 1, N - 1)].copy(),
+                "state": next_obs["state"].copy(),
                 "pixels": pixels_placeholder.copy(),
             },
             "actions": action.copy(),
@@ -493,8 +687,10 @@ def validate_output(pkl_path: str) -> bool:
     print(f"[CHECK] state dtype: {t0['observations']['state'].dtype}")
     print(f"[CHECK] pixels dtype: {t0['observations']['pixels'].dtype}")
 
-    if state_dim != (8,):
-        print(f"[FAIL] state shape {state_dim} != (8,)")
+    # A2: state dim must match sim/data/contract.STATE_DIMS (25D)
+    from sim.data.contract import STATE_DIMS
+    if state_dim != (STATE_DIMS,):
+        print(f"[FAIL] state shape {state_dim} != ({STATE_DIMS},)")
         ok = False
     if pixels_shape != (IMAGE_C, IMAGE_H, IMAGE_W):
         print(f"[FAIL] pixels shape {pixels_shape} != ({IMAGE_C},{IMAGE_H},{IMAGE_W})")

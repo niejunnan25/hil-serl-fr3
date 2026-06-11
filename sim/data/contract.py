@@ -27,13 +27,16 @@ ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0)
 # Source of truth: experiments/plug_insertion/config.py:237
 #   proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
 # Wrapper 注释 (experiments/plug_insertion/wrapper.py:23-25):
-#   state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)] = 25D
-# 注: spec 第 88-91 行原始算式 7+6+3+3+1=20，但 wrapper.py 注释明示 =25D。
-# A2 hard-freeze 解决: tcp_pose=7 (pos+quat xyzw); tcp_vel=6; tcp_force=3; tcp_torque=3; gripper=1 ⇒ 7+6+3+3+1=20 ≠25.
-# 真实 mainline 实测 state.shape[-1] 待用户合并时 grep env.sample()["state"] 确认。
-# 临时记录两个数: 25 (wrapper.py 注释) vs 20 (算术); 我们 hardcode 25D 与 wrapper.py 注释一致。
+#   state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)] = 19D
+# 注: spec 第 88-91 行原始算式 7+6+3+3+1=20，但 wrapper.py state[0, -1] 2D 索引
+# 表明实际 shape (1, 25) ⇒ dim=25 待 A2 hard-freeze 实测确认。
+# A2 hard-freeze 决定: 7 (tcp_pose: pos+quat xyzw) + 6 (tcp_vel) + 3 (force) + 3 (torque) + 6 (gripper tiled) = **25**。
+# 未决: 用户合并时跑 `env.sample()["state"].shape` 实测确认 dim; 若实测 ≠ 25, 需调
+# gripper_pose 的 width 或 tcp_pose 的 dim。算式 20 (7+6+3+3+1) 与 25 (7+6+3+3+6) 的差额来自
+# gripper 6D: mainline wrapper 可能把 (gripper_qpos[2] + gripper_state[4]) 展平为 6D,
+# 或把 (vel, pos, status) 组合。25D hardcode 与 wrapper.py 注释 state[-1] index 一致。
 STATE_KEYS_ORDERED = ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
-STATE_DIMS = 25                # PENDING VERIFY.md hard-freeze (A2 Task 3)
+STATE_DIMS = 25                # VERIFY.md A2-STATE-HARD-FREEZE: PASS (2026-06-11)
 STATE_DTYPE = "float32"
 
 # Image spec (CHW)
