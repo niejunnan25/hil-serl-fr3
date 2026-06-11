@@ -76,3 +76,15 @@
 - L1 isolation gate: OK (per-file gate on contract.py / plug_scene.py 中我添加的部分；pre-existing /home/robot 引用属 A5/A6 范围)
 - IsaacLab runtime test 推迟到 mainline agent / desktop env (本地无 isaaclab 安装)
 - 下一步：A8 (domain randomization) 现在可启动 (依赖 A3 cfg 字段)
+
+### A2 完成 ✅
+- sim/data/contract.py STATE_DIMS=25 hard-freeze (verifies 7+6+3+3+6=25, gripper 6D tiled)
+- sim/data/gello_replay.py capture_observation 改 25D (per STATE_KEYS_ORDERED, sim.kinematics.fr3_fk FK)
+- sim/data/gello_replay.py replay_pure_fk + replay_in_sim 同步产 25D (用 capture_observation 统一入口)
+- sim/data/gello_replay.py validate_output 改用 STATE_DIMS (不再 hardcode 8)
+- sim/data/tests/test_contract.py 新增 9 个断言 (含 STATE_DIMS=25 / STATE_KEYS_ORDERED 等)
+- sim/data/tests/test_state_25d.py 新增 4 个断言 (含 arith 20 vs wrapper 25 矛盾的 warning)
+- L1 A2-scope isolation gate: clean (无 droid/EnvConfig/franka_env/scripts import; 预存 /home/robot 是 A6 USD 范围)
+- L1 全 sim tree: 24 passed, 2 skipped, 1 warning
+- VERIFY.md hard-freeze 标签: A2-STATE-HARD-FREEZE: PASS
+- 下一步：A9 (failure_scenario_generator) 现在可启动；A10 (verify_sim_data.py) 现在可启动
