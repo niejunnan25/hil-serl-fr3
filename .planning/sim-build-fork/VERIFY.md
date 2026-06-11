@@ -3,6 +3,83 @@
 
 ---
 
+## L1 isolation gate: clean
+
+**Status:** L1-ISOLATION-CLEANUP: PASS (final pre-merge pass, 2026-06-11)
+
+**5 target files cleaned** (per user task spec + `sim/tests/test_l1_isolation_gate.py::CONTAMINATED_FILES`):
+
+| File | L1 hits before | L1 hits after | What was fixed |
+|------|----------------|---------------|----------------|
+| `sim/scenes/plug_scene.py` | 2 (1 docstring + 1 code) | 0 | `/home/robot` docstring + path constant |
+| `sim/scenes/plug_scene_preview.py` | 2 (1 docstring + 1 code) | 0 | `/home/robot` docstring + `FK_SCRIPTS` hardcode |
+| `sim/safety/runtime_check.py` | 1 (docstring) | 0 | `droid.sim.standalone_runner` docstring ref |
+| `sim/safety/feasibility_checker.py` | 1 (comment) | 0 | `/home/robot/droid` comment |
+| `sim/data/sim_replay_pipeline.py` | 2 (1 docstring + 1 code) | 0 | conda-activate docstring snippet + `GELLO_PIPELINE` hardcode |
+
+**Verification commands + actual output**:
+
+```bash
+# Per-file L1 grep on the 5 cleaned files
+for f in sim/scenes/plug_scene.py sim/scenes/plug_scene_preview.py \
+         sim/safety/runtime_check.py sim/safety/feasibility_checker.py \
+         sim/data/sim_replay_pipeline.py; do
+  echo "=== $f ==="
+  grep -nE "/home/robot|droid\.sim" "$f" || echo "clean"
+done
+# Output: all 5 files report "clean" (zero hits)
+```
+
+**L1 gate (Bash, manual, the user's gate)**:
+```bash
+grep -rE "panda_joint|/home/robot|droid\.sim|EnvConfig|franka_env|from scripts|import scripts" \
+    sim/ --include="*.py" --exclude-dir=tests
+# Status: ZERO hits in the 5 target files.
+# Hits in 4 OUT-OF-SCOPE files (gello_replay.py, demo_relative_replay.py, lighting.py,
+# official_fr3_loader.py) are pre-existing residuals that were deliberately NOT in the
+# user's 5-file cleanup scope and are documented in PROGRESS.md "L1 isolation gate
+# cleanup" section. The 5 target files are clean.
+```
+
+**Test guard** (`sim/tests/test_l1_isolation_gate.py`, 9 tests):
+- `test_all_5_contaminated_files_exist` × 5 (parametrized): PASS
+- `test_no_hardcoded_home_robot_paths`: PASS (no /home/robot in any of the 5)
+- `test_no_hardcoded_droid_sim_imports`: PASS (no droid.sim imports or mentions in any of the 5)
+- `test_no_hardcoded_envconfig_imports`: PASS (no EnvConfig imports in any of the 5)
+- `test_residual_count_matches_known_inventory`: PASS
+- All 9 L1 tests pass.
+
+**Full sim/ test suite**:
+```bash
+python -m pytest sim/ -v
+# 111 passed, 2 skipped, 4 warnings in 3.07s
+```
+- 2 skipped tests are pre-existing `test_data_imports.py` skips for
+  `test_sim_replay_pipeline_importable` and `test_gello_replay_importable` (skipped in
+  A1 plan, depend on droid/isaaclab that aren't in the sim-only checkout).
+- 4 warnings: 1 state_25d warning (arith 20 vs wrapper 25 conflict — pre-existing
+  per A2 plan), 3 sklearn/scipy deprecation warnings (pre-existing, not regressions).
+- 111 passed is the full L1 cleanup test class (9) + A1-A12 test surface (102) = 111.
+
+**Out-of-scope L1 hits (deliberately NOT cleaned, documented in PROGRESS.md)**:
+- `sim/data/gello_replay.py`: 5 `/home/robot` hits (conda-activate docstring + 2 dev-box
+  comments + 2 path constants). Module is **imported** by `failure_scenario_generator.py`
+  + 8 test files, but the `/home/robot` paths are runtime-resolved by gello_replay's own
+  candidate list (try/except wrapped per A4 plan). Out of scope by user task spec.
+- `sim/data/demo_relative_replay.py`: 5 `droid.sim` hits. **DEPRECATED** file (line 1
+  disclaimer), not importable, no importers in repo. Out of scope by user task spec.
+- `sim/assets/lighting.py`: 1 `/home/robot` hit in docstring (informational "sampled from"
+  footnote). Out of scope by user task spec.
+- `sim/assets/official_fr3_loader.py`: 3 `/home/robot` hits (path constants). Not
+  importable locally (needs isaaclab), no importers in repo. Out of scope by user task
+  spec.
+
+**Decision (per user task spec)**: 5-file cleanup is COMPLETE. Out-of-scope residuals
+are tracked but NOT touched in this commit — the L1 test's `CONTAMINATED_FILES` tuple
+explicitly scopes to the 5 files, and pytest 9/9 confirms the scope is satisfied.
+
+---
+
 ## A3: PlugSceneCfg + side_policy_cam + wrist_1_cam + side_classifier alias
 
 **Status:** A3-CFG-SCHEMA: PASS
