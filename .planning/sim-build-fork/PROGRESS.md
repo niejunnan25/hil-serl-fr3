@@ -112,3 +112,12 @@
   留待 v2.2 或 mainline Phase 6 退出时补; 已在 VERIFY.md 显式记录。
 - L1 isolation gate: OK (新加内容无 droid.sim / EnvConfig / franka_env 引用)
 - 下一步：A9 (failure_scenario_generator) — 需 A2/A7 完成; A10 在 A9 之后
+
+### A9 完成 ✅ (2026-06-11)
+- 新增 sim/data/failure_scenario_generator.py: 4 类 failure (mis_alignment / angle_offset / insufficient_force / drop)
+- sim/data/contract.py 加 FAILURE_* 常量 (5 个范围 + 1 个 FAILURE_REWARD + 1 个 FAILURE_CLASSES enum)
+- 输出: SERL pkl, 全部 reward=0, 与 gello_replay schema 一致 (25D state + 7D action + transition keys)
+- 复用 gello_replay.replay_pure_fk() 产 25D state trajectory; 扰动由 numpy 完成; 不调 IsaacLab runtime
+- 10 个 test 通过 (4 各自 produce pkl + 4 各自 schema + 1 4 类互不相同 + 1 generate_all)
+- L1 isolation gate: OK
+- 下一步：A10 (verify_sim_data.py) — 必须 assert 3 键 image schema + ordered state keys
