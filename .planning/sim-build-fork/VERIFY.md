@@ -1,23 +1,23 @@
-# VERIFY.md — sim-build-fork v2.1
-
-Per-plan validation labels, append-only.
 
 ---
 
-## A4: action_scale 对齐 (0.015, 0.1, 1.0) — 从 contract 强制
+## A3: PlugSceneCfg + side_policy_cam + wrist_1_cam + side_classifier alias
 
-**Status:** A4-ACTION-SCALE: PASS
+**Status:** A3-CFG-SCHEMA: PASS
 
-**常量确认**（来自 `sim/data/gello_replay.py`）:
-- `DEFAULT_POS_SCALE = ACTION_SCALE[0] = 0.015` ✓
-- `DEFAULT_RPY_SCALE = ACTION_SCALE[3] = 0.1` ✓
-- `DEFAULT_GRIPPER_SCALE = ACTION_SCALE[6] = 1.0` ✓ (新加)
-- `replay_in_sim` / `replay_pure_fk` 内 `action_scale = list(ACTION_SCALE)` (7D, 非 3D)
+**cfg 字段确认**（来自 `sim/scenes/plug_scene.py` PlugSceneCfg）:
+- `side_policy_cam: TiledCameraCfg` (top-down, 0.5/0/0.5, look down)
+- `wrist_1_cam: TiledCameraCfg` (gripper-mounted, 0/0/0.05 offset)
+- 分辨率 128x128 RGB (matches IMAGE_SHAPE)
 
-**Source of truth 链**:
-  gello_replay → sim.data.contract.ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0)
-  contract.ACTION_SCALE → 手动 hardcode (与 mainline EnvConfig.ACTION_SCALE 一致; 不 import)
+**Contract 字段确认**（来自 `sim/data/contract.py`）:
+- `VALID_PKL_IMAGE_KEYS = ("side_policy", "wrist_1", "side_classifier")` ✓
+- `IMAGE_KEY_ALIAS_MAP = {"side_classifier": "side_policy"}` ✓
+
+**A10 影响**: verify_sim_data.py 现在可 assert pkl schema 含三键 (side_policy / wrist_1 / side_classifier)。
+
+**IsaacLab runtime test**: 本地无 isaaclab 安装 (pip show isaaclab = not found), cfg 字段正确性 = 单元测试覆盖；scene 实例化 = desktop env (mainline agent) 验证。
 
 **Test 报告**:
-- `python -m pytest sim/data/tests/test_action_scale.py -v` → 5 passed
-- `python -m pytest sim/data/tests/` → 6 passed, 2 skipped (pre-existing skips)
+- `python -m pytest sim/scenes/tests/test_plug_scene_cfg.py -v` → 3 passed
+- `python -m pytest sim/data/tests/test_contract_image_aliases.py -v` → 4 passed

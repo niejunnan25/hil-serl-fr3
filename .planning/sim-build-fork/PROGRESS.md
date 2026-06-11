@@ -69,3 +69,10 @@
 1. **创建 sim/data/contract.py** — plan 假设 A2 Task 1 已经建好，但 A2 实际未跑。contract.py 内的 ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0) 按 spec 钉值，未 import experiments/scripts/droid（保持 L1 隔离）。
 2. **fk_converter / normalize_action imports 包装 try/except** — plan 未要求，但 gello_replay 在 vanilla dev / CI 上 import 会因 /home/robot/... 路径不存在而失败，导致所有常量测试因 ModuleNotFoundError 而非断言失败而 RED。包装后 surfaces None；replay_*() 入口在真正调用时再 raise 清晰错误。
 3. **A4 test 套 5 项全部 PASS**（plan 期望 22 passed 的 22 = contract 9 + state_25d 4 + image_aliases 4 + action_scale 5；后三项属 A2/A3 plan，A4 隔离执行时不在本分支上）。
+
+### A3 完成 ✅
+- sim/scenes/plug_scene.py PlugSceneCfg 加 side_policy_cam + wrist_1_cam (TiledCameraCfg; local 无 isaaclab 时用 _StubTiledCamera)
+- sim/data/contract.py 加 IMAGE_KEY_ALIAS_MAP (side_classifier→side_policy) + VALID_PKL_IMAGE_KEYS (3 键)
+- L1 isolation gate: OK (per-file gate on contract.py / plug_scene.py 中我添加的部分；pre-existing /home/robot 引用属 A5/A6 范围)
+- IsaacLab runtime test 推迟到 mainline agent / desktop env (本地无 isaaclab 安装)
+- 下一步：A8 (domain randomization) 现在可启动 (依赖 A3 cfg 字段)

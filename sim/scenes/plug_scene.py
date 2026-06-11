@@ -62,6 +62,14 @@ from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg, SimulationContext
 
+# A3: TiledCamera (optional; local may lack isaaclab)
+try:
+    from isaaclab.sensors import TiledCameraCfg
+    HAS_TILED_CAMERA = True
+except ImportError:
+    HAS_TILED_CAMERA = False
+    TiledCameraCfg = None  # type: ignore[assignment,misc]
+
 
 # ===========================================================================
 # Constants
@@ -187,11 +195,95 @@ def _build_socket_cfg(prim_path: str = "{ENV_REGEX_NS}/Socket") -> RigidObjectCf
 
 
 # ===========================================================================
+# A3: Camera builders (side_policy_cam + wrist_1_cam)
+# ===========================================================================
+@dataclasses.dataclass
+class _StubTiledCamera:
+    """Local stand-in for TiledCameraCfg when isaaclab is not installed.
+
+    Allows dataclass instantiation + field-presence test without IsaacLab.
+    Desktop env (mainline agent) will replace with real TiledCameraCfg.
+    """
+    prim_path: str
+    position: tuple = (0.0, 0.0, 0.0)
+    target: tuple = (0.0, 0.0, 0.0)
+
+
+def _build_side_policy_cam_cfg(prim_path: str = "{ENV_REGEX_NS}/side_policy_cam") -> Any:
+    """Top-down side camera looking at plug area (policy network's primary view).
+
+    Position: (0.5, 0.0, 0.5) above and to the side of the workspace.
+    Look-at:  (0.0, 0.0, TABLE_HEIGHT) — plug insertion center.
+    Resolution: 128x128 (matches IMAGE_SHAPE in sim/data/contract.py).
+    """
+    if TiledCameraCfg is None:
+        return _StubTiledCamera(
+            prim_path=prim_path,
+            position=(0.5, 0.0, 0.5),
+            target=(0.0, 0.0, TABLE_HEIGHT),
+        )
+    return TiledCameraCfg(  # type: ignore[call-arg]
+        prim_path=prim_path,
+        offset=TiledCameraCfg.OffsetCfg(  # type: ignore[attr-defined]
+            pos=(0.5, 0.0, 0.5),
+            rot=(0.0, -1.0, 0.0, 0.0),  # 180 deg around Y, look down at table
+            convention="world",
+        ),
+        data_type="rgb",
+        spawn=sim_utils.PinholeCameraCfg(  # type: ignore[attr-defined]
+            focal_length=24.0,
+            focus_distance=1.5,
+            horizontal_aperture=20.0,
+            clipping_range=(0.05, 5.0),
+        ),
+        width=128,
+        height=128,
+    )
+
+
+def _build_wrist_1_cam_cfg(prim_path: str = "{ENV_REGEX_NS}/wrist_1_cam") -> Any:
+    """Wrist-mounted camera on gripper link (policy's secondary view).
+
+    Position: relative to gripper link (offset 0, 0, 0.05).
+    Look-at:  downward at plug.
+    """
+    if TiledCameraCfg is None:
+        return _StubTiledCamera(
+            prim_path=prim_path,
+            position=(0.0, 0.0, 0.05),
+            target=(0.0, 0.0, -0.1),
+        )
+    return TiledCameraCfg(  # type: ignore[call-arg]
+        prim_path=prim_path,
+        offset=TiledCameraCfg.OffsetCfg(  # type: ignore[attr-defined]
+            pos=(0.0, 0.0, 0.05),
+            rot=(1.0, 0.0, 0.0, 0.0),  # identity quat
+            convention="world",
+        ),
+        data_type="rgb",
+        spawn=sim_utils.PinholeCameraCfg(  # type: ignore[attr-defined]
+            focal_length=12.0,
+            focus_distance=0.3,
+            horizontal_aperture=15.0,
+            clipping_range=(0.01, 1.0),
+        ),
+        width=128,
+        height=128,
+    )
+
+
+# ===========================================================================
 # PlugSceneCfg — InteractiveScene dataclass (DROID pattern)
 # ===========================================================================
 @dataclasses.dataclass
 class PlugSceneCfg(InteractiveSceneCfg):
-    """InteractiveScene config for the plug-insertion task."""
+    """InteractiveScene config for the plug-insertion task.
+
+    A3 改造 (PLAN-A3):
+      + side_policy_cam: top-down side camera (policy primary view)
+      + wrist_1_cam:     gripper-mounted camera (policy secondary view)
+    sim/data/contract.py 中 side_classifier 是 side_policy 的 alias in sim pkl schema。
+    """
     num_envs: int = 1
     env_spacing: float = 2.5
     replicate_physics: bool = True
@@ -200,6 +292,10 @@ class PlugSceneCfg(InteractiveSceneCfg):
     table: Any = dataclasses.field(default_factory=_build_table_cfg)
     plug: Any = dataclasses.field(default_factory=_build_plug_cfg)
     socket: Any = dataclasses.field(default_factory=_build_socket_cfg)
+
+    # A3: 2 camera sensors (policy image keys)
+    side_policy_cam: Any = dataclasses.field(default_factory=_build_side_policy_cam_cfg)
+    wrist_1_cam: Any = dataclasses.field(default_factory=_build_wrist_1_cam_cfg)
 
 
 # ===========================================================================
