@@ -11,13 +11,23 @@
   5. save as SERL pkl          — 输出标准格式
 
 依赖:
-  - gello_replay.py            (sim 回放 + obs 记录)
+  - gello_replay.py            (sim 回放 + obs 记录; resolves its own
+                                 fk_converter / normalize_action deps
+                                 from scripts/gello_pipeline/ via its
+                                 own candidate list — no need to expose
+                                 that path here)
   - plug_reward_labeler.py     (reward 自动标记)
   - fk_converter.py            (FK 转换, 来自 gello_pipeline/)
   - normalize_action.py        (动作归一化, 来自 gello_pipeline/)
 
 用法 (on fr3-desktop-ts):
-    source /home/robot/miniconda3/etc/profile.d/conda.sh && conda activate isaaclab
+
+    # Conda environment activation is the caller's responsibility:
+    #   conda activate isaaclab
+    # Run this script inside that environment (or any environment where
+    # `python` resolves to one with the sim-side deps installed). Do not
+    # hardcode the path to miniconda here — the host layout varies across
+    # workstations and CI sandboxes.
 
     # 单文件模式
     python sim_replay_pipeline.py --npz /tmp/gello_demos/demo.npz
@@ -48,12 +58,15 @@ import numpy as np
 # ===========================================================================
 # 项目 import path
 # ===========================================================================
-GELLO_PIPELINE = "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline"
-SIM_DATA = os.path.dirname(os.path.abspath(__file__))
-
-for _p in [SIM_DATA, GELLO_PIPELINE]:
-    if os.path.isdir(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
+# NOTE: fk_converter / normalize_action are imported transitively from
+# `gello_replay`, which keeps its own (relative, not hardcoded) list of
+# candidate paths. We deliberately do NOT inject a hardcoded absolute
+# gello_pipeline path here — the repo root layout is the caller's
+# responsibility (set PYTHONPATH or use the repo-relative search list in
+# gello_replay).
+_SIM_DATA = os.path.dirname(os.path.abspath(__file__))
+if _SIM_DATA not in sys.path:
+    sys.path.insert(0, _SIM_DATA)
 
 # 从 gello_replay 导入核心功能
 from gello_replay import (

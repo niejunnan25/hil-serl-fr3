@@ -80,10 +80,9 @@ EXPECTED_RESIDUALS: dict[Path, list[tuple[int, str]]] = {
     REPO_ROOT / "sim" / "safety" / "feasibility_checker.py": [
         (62, "/home/robot/droid in comment (franka_hardware_left.yaml path)"),
     ],
-    REPO_ROOT / "sim" / "data" / "sim_replay_pipeline.py": [
-        (20, "/home/robot in docstring (conda activate snippet)"),
-        (51, "GELLO_PIPELINE hardcoded to /home/robot/serl_projects"),
-    ],
+    # sim/data/sim_replay_pipeline.py cleared in this commit:
+    #   - line 20 docstring conda-activate snippet replaced with caller-responsibility note
+    #   - line 51 GELLO_PIPELINE hardcode replaced with repo-relative sys.path bootstrap
 }
 
 
@@ -281,7 +280,7 @@ class TestL1IsolationGate:
         for path, lines in EXPECTED_RESIDUALS.items():
             for lineno, _reason in lines:
                 all_known.add((str(path.relative_to(REPO_ROOT)), lineno))
-        assert len(all_known) == 6, (
-            f"Expected exactly 6 residuals, found {len(all_known)}: "
+        assert len(all_known) == 4, (
+            f"Expected exactly 4 residuals, found {len(all_known)}: "
             f"{sorted(all_known)}"
         )
