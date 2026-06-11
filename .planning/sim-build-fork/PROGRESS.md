@@ -185,3 +185,28 @@
 2. 重跑 A11 + A12 with balanced fixture
 3. 验证 precision/recall ≥ 0.85 (per ROADMAP)
 4. 用户批准后打 `phase6-ready` 标签
+
+---
+
+### A9-A12 + 3 fixes 完成 ✅ (2026-06-11)
+
+- **A9 failure_scenario_generator** — 4 classes (mis_alignment, angle_offset, insufficient_force, drop)
+  + contract.py 加 `FAILURE_SCENARIO_RANGES` 数值表 (信息性, 不作 readiness 判据)
+- **A10 verify_sim_data.py** — 3-key image schema (side_policy / wrist_1 / side_classifier) +
+  ordered state keys (25D, fixed order) — 真实 pkl 校验入口
+- **A11 gen_mock_real_pkl.py + test_domain_alignment.py** — mock-only smoke, **NOT readiness**
+  - mock pkl pos_ratio = 0.8; 不构成 ROADMAP 0.85 precision/recall
+  - 关闭 codex #6 (A11 mock 阈值太弱)
+- **A12 test_mixed_training.py** — mock-only smoke (sklearn LogisticRegression; 25D state, no images)
+  - 6 passed; CLI subprocess smoke exit 0
+  - 关闭 codex #6 (A12 mock 阈值 > 50% 太弱): 通过条件 = schema/format smoke, NOT accuracy
+- **3 fixes (codex REVIEW-final.md)**:
+  - **#1 (HIGH env)**: numpy 2.x + sklearn 1.5.x ABI mismatch → `sim/scripts/requirements.txt` pin
+    `numpy<2.0` (1.26.4) + `scikit-learn==1.3.0`; runtime 验证 deferred 到主线 conda env
+  - **#6 (MED)**: A11/A12 mock 阈值太弱 → 显式标注 "mock-only, NOT readiness"
+  - **#7 (MED)**: phase6-ready 误用风险 → DEFERRED 标签 + 4 项要求清单
+
+**L1 isolation gate: clean** (无 sim_remote 硬编码残留, 无 panda_joint 残留, 无 /home/robot 路径)
+
+**`sim-code-ready: PASS`** (A1-A12 全部 done + 3 fixes resolved + VERIFY.md/SYNC.md 落地)
+

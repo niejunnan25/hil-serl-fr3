@@ -1,4 +1,6 @@
 
+## Status: sim-code-ready: PASS / phase6-ready: DEFERRED
+
 ---
 
 ## A3: PlugSceneCfg + side_policy_cam + wrist_1_cam + side_classifier alias
@@ -274,3 +276,52 @@ schema 正确性; 真实 image rendering / contact sensor 验证留给 mainline 
 接手 agent 第一步:
 1. 读 DESIGN.md / PROGRESS.md / VERIFY.md
 2. 决定: 继续未完成 plan (本 milestone 全部 done) / 申请 `phase6-ready` gate / 合并回主线
+
+---
+
+## Final Review (2026-06-11)
+
+- **12 plans done (A1-A12)** — 全部 spec section 范围已覆盖
+  - A1 sim_remote 资产搬运 + sim 根目录清理
+  - A2 gello_replay state 8D→25D hard-freeze
+  - A3 PlugSceneCfg + side_policy_cam / wrist_1_cam / side_classifier alias
+  - A4 gello_replay action_scale 从 contract 读取 (single-source-of-truth)
+  - A5 gello_replay panda_joint → fr3_joint
+  - A6 (在 A1+A5 流程内完成)
+  - A7 plug_reward_labeler thresholds 8mm/2mm/5° lock + 抽到 contract
+  - A8 domain randomization (light / camera / plug)
+  - A9 failure_scenario_generator 4 classes (mis_alignment / angle_offset / insufficient_force / drop)
+  - A10 verify_sim_data.py 3-key image schema + ordered state keys
+  - A11 gen_mock_real_pkl.py + test_domain_alignment.py (smoke-only)
+  - A12 test_mixed_training.py (smoke-only, ABI pin numpy<2.0 + sklearn==1.3.0)
+
+- **3 follow-up issues from codex REVIEW-final.md resolved**:
+  - **#1 (HIGH env, A12)**: numpy 2.x + scikit-learn 1.5.x ABI mismatch →
+    sim/scripts/requirements.txt pin numpy<2.0 (1.26.4) + scikit-learn==1.3.0
+  - **#6 (MED, A12)**: A12 mock accuracy > 50% 太弱不够 readiness →
+    重新明确 A12 通过条件 = schema/format smoke (脚本跑通 + fit + predict emit + exit 0),
+    NOT accuracy-based; README + PROGRESS.md 同步
+  - **#7 (MED)**: phase6-ready 标签误用风险 → DEFERRED 标签硬性保留, 显式列出
+    real pkl + balanced fixture + precision/recall ≥ 0.85 + user gate 4 项要求
+
+- **L1 isolation gate: clean** — sim 侧 import 链不污染 real 侧, 无 sim_remote 路径硬编码
+  残留, 无 panda_joint 字符串残留, 无 /home/robot 硬编码
+
+- **`sim-code-ready: PASS`** — all schema/contract/verify scripts in place:
+  - `sim/data/contract.py` 单一来源 (state 25D, image 3-key, action_scale)
+  - `sim/data/verify_sim_data.py` (A10) — 真实 pkl schema 校验入口
+  - `sim/safety/feasibility_checker.py` / `runtime_check.py` — 隔离 gate
+  - `sim/data/plug_reward_labeler.py` — 8mm/2mm/5° thresholds locked
+  - `sim/scenes/plug_scene.py` — 3 camera + DR config
+  - `sim/data/failure_scenario_generator.py` — 4 failure classes
+  - `sim/scripts/gen_mock_real_pkl.py` (A11 mock fixture)
+  - `sim/scripts/test_domain_alignment.py` / `test_mixed_training.py` (A11/A12 smoke)
+  - `sim/scripts/requirements.txt` — ABI pin
+
+- **`phase6-ready: DEFERRED`** — 需后续在主线满足:
+  1. Real pkl (50%+ positive ratio, 真实图像, 来自 real FR3 8010 录制)
+  2. Balanced fixture (50/50 pos/neg)
+  3. ROADMAP Phase 6 precision ≥ 0.85, recall ≥ 0.85 (混淆矩阵)
+  4. User approval gate (per spec D11)
+  - 上述 4 项任一缺失 → `phase6-ready` 不构成; A11/A12 mock smoke 不构成 readiness
+
