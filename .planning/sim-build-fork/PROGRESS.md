@@ -123,3 +123,28 @@
 - L1 isolation gate: OK
 - **Real pkl + balanced fixture + confusion matrix = phase6-ready gate, NOT this plan**
 - 下一步：A12 (test_mixed_training.py) — 同样 smoke-only
+
+### A12 完成 ✅ (2026-06-11)
+- 新增 sim/scripts/test_mixed_training.py: mixed sim negative + mock real positive smoke
+- 模型: sklearn LogisticRegression; features: 25D state (no images)
+- 报告: accuracy + baseline_accuracy (majority class) + confusion_matrix (tn/fp/fn/tp)
+- **Codex #6 (MED "A12 mock 阈值 > 50% 太弱") 关闭**: A12 通过条件 = schema/format smoke
+  (脚本跑通 + 模型 fit + 预测 emit, exit 0); NOT accuracy-based
+- 6 个 test passed (import + load_features + train + compute_report + main + CLI subprocess)
+- CLI smoke: A9 sim pkl + A11 mock real pkl → mixed training 跑通 exit 0
+- L1 isolation gate: OK
+- **sim-code-ready: PASS** (A1-A10 done + A11/A12 schema smoke pass)
+- **phase6-ready: NOT PASS** (per codex #5/#7: 需要 real pkl + ROADMAP precision/recall ≥ 0.85 + user approval)
+
+---
+
+## 退出标签 (per spec D5b + D11)
+
+- ✅ `sim-code-ready: PASS` — A1-A12 全部完成; sim 侧自验可宣告
+- ⏸ `phase6-ready: DEFERRED` — 需用户合并时实测, 不在本 fork 范围
+
+下一步（用户合并时）:
+1. 替换 A11 mock real pkl 为真机 pkl
+2. 重跑 A11 + A12 with balanced fixture
+3. 验证 precision/recall ≥ 0.85 (per ROADMAP)
+4. 用户批准后打 `phase6-ready` 标签
