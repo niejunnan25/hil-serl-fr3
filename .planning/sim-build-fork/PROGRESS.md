@@ -101,3 +101,14 @@
 - 全套 sim/data/tests: 33 passed, 2 skipped (A2-A7 全绿)
 - L1 isolation gate: A7-scope clean; pre-existing /home/robot & droid.sim 引用 (gello_replay / sim_replay_pipeline / demo_relative_replay) 属 A1/A5/A6 范围, A7 未触碰
 - 下一步：A8 (domain randomization) — 需 A3 完成 (已 ✅)
+
+### A8 完成 ✅ (2026-06-11)
+- sim/scenes/plug_scene.py PlugScene.__init__ 加 randomize: bool + dr_seed: int 参数
+- 新增方法: _randomize_lighting / _randomize_camera_pose / _randomize_plug_pose / info_dr_samples
+- sim/data/contract.py 加 6 个 DR 常量 (LIGHT_INTENSITY, CAMERA_YAW/PITCH, PLUG_XY/RZ, SEED)
+- 6 个 unit test 锁死 DR 范围与复现性
+- 范围: light 800-1200, camera ±5° yaw/pitch, plug ±1cm xy / ±0.1 rad rz
+- **Codex #3 trade-off**: 本 plan 不做 background randomization (textures / sky);
+  留待 v2.2 或 mainline Phase 6 退出时补; 已在 VERIFY.md 显式记录。
+- L1 isolation gate: OK (新加内容无 droid.sim / EnvConfig / franka_env 引用)
+- 下一步：A9 (failure_scenario_generator) — 需 A2/A7 完成; A10 在 A9 之后

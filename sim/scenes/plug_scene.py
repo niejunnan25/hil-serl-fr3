@@ -318,13 +318,21 @@ class PlugScene:
         self,
         headless: bool = True,
         device: Optional[str] = None,
-        dt: float = 1.0 / 60.0,
+        dt: float = 1.0 / 30.0,
         substeps: int = 10,
+        randomize: bool = False,
+        dr_seed: Optional[int] = None,
     ):
+        from sim.data.contract import RANDOMIZE_SEED_DEFAULT
         self._headless = headless
         self._dt = dt
         self._substeps = substeps
         self._device = device  # resolved during _build_scene
+        # A8: domain randomization
+        self._randomize = randomize
+        self._dr_seed = dr_seed if dr_seed is not None else RANDOMIZE_SEED_DEFAULT
+        self._dr_rng: Optional[np.random.Generator] = None
+        self._dr_samples: dict = {}  # for info() reporting
 
         # Scene handles
         self._sim: Optional[SimulationContext] = None
@@ -490,6 +498,60 @@ class PlugScene:
                 pass
             self._built = False
             print("[SCENE] Simulation closed.")
+
+    # ------------------------------------------------------------------
+    # A8: domain randomization (per PLAN-A8)
+    # ------------------------------------------------------------------
+    def _init_dr_rng(self) -> None:
+        """Initialize DR RNG with the configured seed (called from reset())."""
+        if self._randomize and self._dr_rng is None:
+            self._dr_rng = np.random.default_rng(self._dr_seed)
+
+    def _randomize_lighting(self, rng: np.random.Generator) -> float:
+        """Sample light intensity in [LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX].
+
+        Returns the sampled intensity (scalar float).
+        """
+        from sim.data.contract import LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX
+        return float(rng.uniform(LIGHT_INTENSITY_MIN, LIGHT_INTENSITY_MAX))
+
+    def _randomize_camera_pose(
+        self, rng: np.random.Generator,
+    ) -> tuple[float, float]:
+        """Sample camera yaw/pitch perturbation in ±5° range.
+
+        Returns:
+            (yaw_deg, pitch_deg) tuple.
+        """
+        from sim.data.contract import (
+            CAMERA_YAW_RANGE_DEG, CAMERA_PITCH_RANGE_DEG,
+        )
+        yaw = float(rng.uniform(*CAMERA_YAW_RANGE_DEG))
+        pitch = float(rng.uniform(*CAMERA_PITCH_RANGE_DEG))
+        return yaw, pitch
+
+    def _randomize_plug_pose(
+        self, rng: np.random.Generator,
+    ) -> tuple[float, float, float]:
+        """Sample plug xy jitter (±1cm) and rz jitter (±0.1 rad).
+
+        Returns:
+            (dx, dy, drz) tuple, all in metres / radians.
+        """
+        from sim.data.contract import PLUG_XY_JITTER_M, PLUG_RZ_JITTER_RAD
+        dx = float(rng.uniform(-PLUG_XY_JITTER_M, PLUG_XY_JITTER_M))
+        dy = float(rng.uniform(-PLUG_XY_JITTER_M, PLUG_XY_JITTER_M))
+        drz = float(rng.uniform(-PLUG_RZ_JITTER_RAD, PLUG_RZ_JITTER_RAD))
+        return dx, dy, drz
+
+    def info_dr_samples(self) -> dict:
+        """Return recorded DR sample values (for debug + L3 reporting).
+
+        Returns:
+            dict with keys: light_intensity, camera_yaw_deg, camera_pitch_deg,
+                            plug_dx, plug_dy, plug_drz.
+        """
+        return dict(self._dr_samples)
 
     # ------------------------------------------------------------------
     # Convenience

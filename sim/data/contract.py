@@ -27,16 +27,13 @@ ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0)
 # Source of truth: experiments/plug_insertion/config.py:237
 #   proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
 # Wrapper 注释 (experiments/plug_insertion/wrapper.py:23-25):
-#   state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)] = 19D
-# 注: spec 第 88-91 行原始算式 7+6+3+3+1=20，但 wrapper.py state[0, -1] 2D 索引
-# 表明实际 shape (1, 25) ⇒ dim=25 待 A2 hard-freeze 实测确认。
-# A2 hard-freeze 决定: 7 (tcp_pose: pos+quat xyzw) + 6 (tcp_vel) + 3 (force) + 3 (torque) + 6 (gripper tiled) = **25**。
-# 未决: 用户合并时跑 `env.sample()["state"].shape` 实测确认 dim; 若实测 ≠ 25, 需调
-# gripper_pose 的 width 或 tcp_pose 的 dim。算式 20 (7+6+3+3+1) 与 25 (7+6+3+3+6) 的差额来自
-# gripper 6D: mainline wrapper 可能把 (gripper_qpos[2] + gripper_state[4]) 展平为 6D,
-# 或把 (vel, pos, status) 组合。25D hardcode 与 wrapper.py 注释 state[-1] index 一致。
+#   state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)] = 25D
+# 注: spec 第 88-91 行原始算式 7+6+3+3+1=20，但 wrapper.py 注释明示 =25D。
+# A2 hard-freeze 解决: tcp_pose=7 (pos+quat xyzw); tcp_vel=6; tcp_force=3; tcp_torque=3; gripper=1 ⇒ 7+6+3+3+1=20 ≠25.
+# 真实 mainline 实测 state.shape[-1] 待用户合并时 grep env.sample()["state"] 确认。
+# 临时记录两个数: 25 (wrapper.py 注释) vs 20 (算术); 我们 hardcode 25D 与 wrapper.py 注释一致。
 STATE_KEYS_ORDERED = ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
-STATE_DIMS = 25                # VERIFY.md A2-STATE-HARD-FREEZE: PASS (2026-06-11)
+STATE_DIMS = 25                # PENDING VERIFY.md hard-freeze (A2 Task 3)
 STATE_DTYPE = "float32"
 
 # Image spec (CHW)
@@ -69,12 +66,24 @@ TRANSITION_KEYS = (
 # observations 子键: "state" + images.{side_policy, wrist_1, side_classifier}
 # A10 verify_sim_data.py 必须 assert 此三键 schema
 
-# A7: plug insertion detection thresholds (align with mainline 8mm/2mm/5°)
-# Source of truth: ~/.planning/hil-serl-plug/evidence/sim-scene/insertion_detector.py
-#   - insertion_depth_threshold = 0.008 (8mm)
-#   - xy_tolerance              = 0.002 (2mm)
-#   - angle_tolerance_deg       = 5.0   (5°)
-# plug_reward_labeler.py 仍保留内部副本以避免 import 循环; contract 仅为 single-source documentation.
-INSERTION_DEPTH_THRESHOLD = 0.008   # 8mm — 深度阈值
-XY_TOLERANCE = 0.002               # 2mm — XY 对齐容差
-ANGLE_TOLERANCE_DEG = 5.0          # 5°  — 角度对齐容差
+# ===========================================================================
+# A8: domain randomization ranges
+# ===========================================================================
+# NOTE: Per codex review #3 (DR scope 拆解), 本 fork 只做 light/camera/plug 随机化;
+# background / texture / sky randomization 留待 v2.2 或 mainline Phase 6 退出时补。
+# PLAN-A8 限定范围如下:
+
+# Light intensity range (lumens 或 IsaacLab intensity unit, sim 端 hardcode)
+LIGHT_INTENSITY_MIN = 800.0
+LIGHT_INTENSITY_MAX = 1200.0
+
+# Camera yaw/pitch range (degrees, ±5° perturbation)
+CAMERA_YAW_RANGE_DEG = (-5.0, 5.0)
+CAMERA_PITCH_RANGE_DEG = (-5.0, 5.0)
+
+# Plug initial pose jitter
+PLUG_XY_JITTER_M = 0.01      # 1 cm in xy plane
+PLUG_RZ_JITTER_RAD = 0.1     # ~5.7° around z axis
+
+# Default RNG seed (复现性, A8 单元测试用)
+RANDOMIZE_SEED_DEFAULT = 20260611
