@@ -65,3 +65,42 @@ env (mainline agent) 验证; **本 plan 验证的是** 纯函数返回值在 con
 走 source-text fallback 兜底 (per test_plug_scene_cfg.py 模式), 保证 TDD cycle 可见
 (no-skip path)。PlugScene class-level tests 用 `PlugScene.__new__(PlugScene)` 跳过
 `__init__` 来直接验证 3 个 `_randomize_*` 方法的纯函数行为。
+
+---
+
+## A11: gen_mock_real_pkl + test_domain_alignment (MOCK SMOKE ONLY)
+
+**Status:** A11-MOCK-SMOKE: PASS (schema smoke; NOT phase6-ready)
+
+**Codex 修复证据**:
+
+**Codex #6 (MED "A12 mock 阈值 > 50% 太弱")**:
+- A11 mock run 是 **schema/format smoke**, 不是 readiness
+- test_domain_alignment.py 的 "通过条件" = 脚本能 end-to-end 跑通 + 打印 report
+- 不做 accuracy-based 验证 (e.g. "state_range_overlap > 0.8" 不构成 readiness)
+- Real pkl + balanced fixture + confusion matrix (precision/recall ≥ 0.85 per ROADMAP)
+  = **phase6-ready gate**, 需要 user approval, 留待合并时实测
+
+**Tools 确认**（来自 `sim/scripts/`）:
+- `gen_mock_real_pkl.py` — CLI: `--output path --num-frames N --pos-ratio 0.8 --seed 20260611`
+  产 50-100 帧 mock real pkl (3 键 image + 25D state + 7D action + 80% pos_ratio)
+- `test_domain_alignment.py` — CLI: `--sim path/sim.pkl --real path/mock_real.pkl`
+  跑 image stats (mean/std) + state range overlap, 打印 report, exit 0 = smoke pass
+
+**Report 内容**:
+- `image_mean_sim`, `image_mean_real`: float (overall mean across 3 image keys)
+- `image_std_sim`, `image_std_real`: float
+- `state_range_overlap`: float ∈ [0, 1] (intersection / union of per-dim state ranges)
+- ⚠️ 这些数值是 **信息性**, 不作 readiness 判据
+
+**Test 报告**:
+- `python -m pytest sim/scripts/tests/test_gen_mock_real_pkl.py -v` → 4 passed
+- `python -m pytest sim/scripts/tests/test_domain_alignment.py -v` → 4 passed
+- CLI smoke: gen → verify → alignment 全跑通 exit 0
+
+**Phase6-ready 真要求 (per ROADMAP)**:
+- Real pkl (50%+ positive, 真实图像)
+- Balanced fixture (50/50 pos/neg)
+- Confusion matrix: precision ≥ 0.85, recall ≥ 0.85
+- User approval gate (per spec D11)
+- A11/A12 mock smoke 不构成此 readiness

@@ -112,3 +112,14 @@
   留待 v2.2 或 mainline Phase 6 退出时补; 已在 VERIFY.md 显式记录。
 - L1 isolation gate: OK (新加内容无 droid.sim / EnvConfig / franka_env 引用)
 - 下一步：A9 (failure_scenario_generator) — 需 A2/A7 完成; A10 在 A9 之后
+
+### A11 完成 ✅ (2026-06-11)
+- 新增 sim/scripts/gen_mock_real_pkl.py: 合成 mock real pkl (50-100 帧, 80% 正样本, 3 键 image)
+- 新增 sim/scripts/test_domain_alignment.py: sim vs mock real 统计对比 (image mean/std + state range overlap)
+- **Codex #6 (MED "A12 mock 阈值 > 50% 太弱") 关闭**: A11 mock run 是 **smoke-only**, 不是 readiness;
+  "测试" = 脚本跑通不 crash + 打印报告, NOT accuracy-based
+- 8 个 test passed (4 gen_mock + 4 domain_alignment)
+- mock real pkl 通过 A10 verify_sim_data.py schema 验证 (确认 3 键 image + 25D state)
+- L1 isolation gate: OK
+- **Real pkl + balanced fixture + confusion matrix = phase6-ready gate, NOT this plan**
+- 下一步：A12 (test_mixed_training.py) — 同样 smoke-only
