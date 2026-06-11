@@ -16,7 +16,7 @@ Key ordering constraint:
     AppLauncher MUST be created BEFORE any isaaclab / omni imports.
 
 Usage (standalone verification on fr3-desktop-ts):
-    source /home/robot/miniconda3/bin/activate isaaclab
+    # NOTE: caller must have isaaclab conda env activated
     python3 plug_scene.py --headless --steps 10
     python3 plug_scene.py --show-gui --steps 50
 
@@ -48,6 +48,7 @@ import argparse
 import dataclasses
 import math
 import os
+import pathlib
 import sys
 import time
 from typing import Any, Optional
@@ -75,7 +76,7 @@ except ImportError:
 # Constants
 # ===========================================================================
 FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
-FR3_USD_PATH = "/home/robot/serl_projects/hil-serl-fr3/sim/assets/fr3.usd"
+FR3_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "fr3.usd")
 
 TABLE_HEIGHT = 0.74              # metres
 TABLE_SIZE = (1.2, 0.8, 0.04)   # (x, y, z) metres
