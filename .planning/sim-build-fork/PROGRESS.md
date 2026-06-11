@@ -46,3 +46,13 @@
    - `sim.data.plug_reward_labeler` → 实际 `label_rewards`（非 `label_insertion`）
    - `sim.data.sim_replay_pipeline` → 实际 `run_pipeline_single` / `run_pipeline_batch`（非 `run_pipeline`）
 4. **`sim_replay_pipeline` 测试需 skip** — 该模块 line 59 import `from gello_replay import ...`，gello_replay 又引用不存在的 `/home/robot/...` 路径，import 链断。已加 `@pytest.mark.skip(reason="待 A2-A6 修复")`。
+
+### A5 完成 ✅ (2026-06-11)
+- sim/data/gello_replay.py: panda_joint[1-7] → fr3_joint[1-7] (10 处)
+- sim/data/gello_replay.py: panda_finger_joint.* → fr3_finger_joint.* (2 处)
+- sim/scenes/plug_scene.py: 已是 fr3_joint (regression lock)
+- sim/data/plug_reward_labeler.py: 已是 fr3_/无 joint 字符串 (regression lock)
+- 新增: sim/data/tests/test_joint_names.py (5 tests: 3 zero-panda + 2 fr3-present)
+- L1 A5-scope gate: OK
+- L1 全 sim tree: 除 test_joint_names.py (字符串字面 assertion) 外零 panda_joint 残留
+- 下一步：A6 (USD 路径硬编码修复)
