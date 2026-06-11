@@ -76,3 +76,16 @@
 - L1 isolation gate: OK (per-file gate on contract.py / plug_scene.py 中我添加的部分；pre-existing /home/robot 引用属 A5/A6 范围)
 - IsaacLab runtime test 推迟到 mainline agent / desktop env (本地无 isaaclab 安装)
 - 下一步：A8 (domain randomization) 现在可启动 (依赖 A3 cfg 字段)
+
+### A7 完成 ✅ (2026-06-11)
+- 验证 sim/data/plug_reward_labeler.py 3 个 threshold 常量 = 0.008 / 0.002 / 5.0 (8mm/2mm/5°)
+  - 数值一致性: 与 ~/.planning/hil-serl-plug/evidence/sim-scene/insertion_detector.py 旧证据一致 (line 22-24, 122, 125)
+- 新增: sim/data/tests/test_reward_thresholds.py (11 tests)
+  - 4 常量断言 (depth/xy/angle/angle_rad 派生)
+  - 5 synthetic-pose case (完美/浅/XY偏/角度偏/边界) — 注: 用 `bool(result.success) is True/False` 避免 numpy.bool_ 跟 Python bool 的 `is` 比较陷阱
+  - 2 reward sanity (sparse 二值, dense ∈ [0,1])
+- 抽 3 个 threshold 到 sim/data/contract.py (A7 addendum, line 70-78)
+- 新增: sim/data/tests/test_contract.py (11 tests) — 涵盖 A2 state/action/image schema + A7 thresholds
+- 全套 sim/data/tests: 33 passed, 2 skipped (A2-A7 全绿)
+- L1 isolation gate: A7-scope clean; pre-existing /home/robot & droid.sim 引用 (gello_replay / sim_replay_pipeline / demo_relative_replay) 属 A1/A5/A6 范围, A7 未触碰
+- 下一步：A8 (domain randomization) — 需 A3 完成 (已 ✅)
