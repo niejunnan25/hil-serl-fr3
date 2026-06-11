@@ -65,3 +65,13 @@ TRANSITION_KEYS = (
 )
 # observations 子键: "state" + images.{side_policy, wrist_1, side_classifier}
 # A10 verify_sim_data.py 必须 assert 此三键 schema
+
+# A7: plug insertion detection thresholds (align with mainline 8mm/2mm/5°)
+# Source of truth: ~/.planning/hil-serl-plug/evidence/sim-scene/insertion_detector.py
+#   - insertion_depth_threshold = 0.008 (8mm)
+#   - xy_tolerance              = 0.002 (2mm)
+#   - angle_tolerance_deg       = 5.0   (5°)
+# plug_reward_labeler.py 仍保留内部副本以避免 import 循环; contract 仅为 single-source documentation.
+INSERTION_DEPTH_THRESHOLD = 0.008   # 8mm — 深度阈值
+XY_TOLERANCE = 0.002               # 2mm — XY 对齐容差
+ANGLE_TOLERANCE_DEG = 5.0          # 5°  — 角度对齐容差
