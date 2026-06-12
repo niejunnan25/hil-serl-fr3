@@ -52,8 +52,24 @@ v2.2.1 progress: Phase A ⏳ | Phase B ⏳ | Phase C ⏳ | Phase D ⏳ (0/4)
   - 数据量：Stage-1 Xbox demo 20 / 完整混合 demo ≥25 / classifier 200+正 600+负
   - π0.5 不进 v2.2.1；v2.3 候选 = RLDG 蒸馏 SAC specialist 数据进 pi05（zktitan OpenPI 现成）
 - 2026-06-13: planning 文件丢失事故记录在案；此后 .planning 变更随做随 commit
+- 2026-06-13: **模型分工决议** — grill/discuss/plan/review 用 Fable 5（最高 effort），
+  execute-phase 全部用 Opus 4.8 xhigh；安全关键 plan（review_gate: fable-5）执行后须过
+  Fable 5 review；切换在 phase 边界换会话完成
+- 2026-06-13: Phase A 规划完成 — plans/PLAN-A0..A5.md 六份（含 inline plan-checker 自检
+  通过），A-RESEARCH.md 存档；发现并纳入 A0：Phase 1/2 代码仅存 desktop、从未入库
 
-## Next Step
+## Next Step — 交给 Opus 4.8 xhigh 执行会话
 
-v2.2.1 Phase A（纯软件，无需 motion 批准）：XboxIntervention wrapper → GelloIntervention
-介入改造 → 混合示教录制器 → P2-T3 motion driver 补全 → desktop 同步。
+**启动方式**：新会话 `/model claude-opus-4-8` + effort xhigh，工作目录
+~/Documents/Code/hilserl-fr3，按 wave 顺序执行
+`.planning/2026-06-13-v221-hybrid-teleop/plans/PLAN-A0..A5.md`（顺序执行，禁 fan-out）。
+
+**执行前提（均已就绪）**：
+- [x] 方案与验收标准落地：DECISIONS.md / ROADMAP（A–D Exit 判据）/ REQUIREMENTS（EVAL-01~03）
+- [x] Phase A 六份 PLAN 含 frontmatter/XML tasks/verification/must_haves
+- [x] 研究存档 A-RESEARCH.md（代码事实 + 约束）
+- [x] desktop SSH 可达、pygame 2.6.1 在位、上游参考仓库路径已记录
+- [x] 全部 planning 已 commit
+- Phase A 不需要：Xbox 手柄实体（B 才要）、motion 批准（B 才要）、zktitan（C 才要）
+
+**A2/A4 完成后**：回到 Fable 5 会话做 review gate，再继续 A3/A5。

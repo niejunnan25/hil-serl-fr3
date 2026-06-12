@@ -30,14 +30,16 @@ P2-T1/T2/T4/T5/T6 ✅（113 tests desktop gate RC=0）。P2-T3（端到端 motio
 **Goal**: Xbox 路径、GELLO 介入改造、混合示教录制器全部代码就绪 + 测试通过。
 **Exit**: desktop pytest 套件全绿；所有新 wrapper mock 模式可运行；无任何真机 motion。
 
-| ID | Task | 说明 |
-|----|------|------|
-| A1 | XboxIntervention wrapper | pygame (2.6.1 已装)；语义对齐 SpacemouseIntervention/GelloIntervention：按住 RB=介入，deadzone 防误触；7D delta 输出；摇杆映射与 scale 档位在 B4 标定 |
-| A2 | GelloIntervention 介入改造 | max_total_delta 预算改造 + env.reset 时 agent.reset；LB 使能开关（armed only while held）；与 Xbox 互斥仲裁（同 tick 双输入时 Xbox 优先，后半程设备优先级高） |
-| A3 | 混合示教录制器 record_hybrid_demos | GELLO joint 相对跟随（leader_scale 0.50/可调）起步 → RB 单向切到 Xbox delta → 同一 episode 连续录制；device/switch_step 写入 metadata（不进 observation）；输出 SERL pkl 兼容 |
-| A4 | P2-T3 motion driver 补全 | scripts/p2_t3_e2e_motion_driver.py（GELLO open → delta agent → POST /pose），approval-gated，沿用 16_gello_e2e_motion_test.sh 四模式框架 |
-| A5 | Xbox e2e + 切换 e2e 测试脚手架 | 仿 P2-T3 scaffolding：mock 模式全程可测，motion 模式 approval-gated |
-| A6 | desktop 同步 + 本地回同步 | 代码推 fr3-desktop-ts:/home/robot/hilserl-fr3；本地 repo 留副本；.planning 变更 commit |
+已规划（plans/PLAN-A0..A5.md，2026-06-13，wave 顺序执行）：
+
+| Plan | Wave | 内容 | 安全关键 |
+|------|------|------|----------|
+| A0 | 1 | 基线回迁与入库（desktop→local rsync + 首次 git commit；Phase 1/2 代码现仅存 desktop） | — |
+| A1 | 2 | TeleopDeviceHub + XboxIntervention（RB deadman、deadzone、档位、TDD mock 后端） | — |
+| A2 | 3 | GelloIntervention 介入改造（LB 使能、按次接入预算、env.reset 重置）+ TeleopArbiter 互斥仲裁 | ✔ Fable 5 review gate |
+| A3 | 4 | record_hybrid_demos：GELLO 段→RB 单向切换→Xbox 段，零跳变 + metadata + pkl schema 等价 | — |
+| A4 | 4 | P2-T3 motion driver + 17/18 e2e 脚手架（全部 approval-gated，Phase A 内仅 dry-run/mock） | ✔ Fable 5 review gate |
+| A5 | 5 | 双向同步 + 19_phase_a_readiness_gate.sh（本地+desktop 双 RC=0）+ planning 翻转入库 | — |
 
 ## v2.2.1 Phase B: 联合真机验收（一次 motion 批准 session）
 
