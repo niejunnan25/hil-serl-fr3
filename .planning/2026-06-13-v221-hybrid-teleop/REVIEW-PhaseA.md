@@ -1,5 +1,10 @@
 # v2.2.1 Phase A — Code Review (2026-06-13)
 
+> **状态更新 2026-06-13 (A6 gap-closure)**: 全部 2 critical + 7 important + 卫生项
+> 已修复并经回归测试 + Opus 对抗式复核确认。证据见 `evidence/phase-a-A6-gate.md`
+> （全量 225 passed，+22 新测试）。下方为修复前的原始 review，保留作为留痕。
+
+
 Reviewer: Opus 4.8 (Fable 5 已停用，按 model-stage-policy 由 Opus 承担 review)。
 方法: 5 维度对抗式 review workflow (wf_46bd312a-4ae, 16 agents, ~1.1M tok) + 主会话独立通读
 A1/A2 核心文件 + 实测复现。每条 critical/important 经独立对抗校验 (confirmed/refuted)。

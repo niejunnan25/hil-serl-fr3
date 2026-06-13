@@ -158,6 +158,12 @@ class GelloIntervention(gym.ActionWrapper):
         self._lb_was_held: bool = False
         self._budget_overrun_logged: bool = False
 
+        # Device-error downgrade state (C1 — A2-F1): a Dynamixel
+        # timeout / USB unplug (OSError/IOError) or a short/malformed
+        # read (AssertionError) must never crash the training loop. We
+        # log once then keep returning the policy action.
+        self._device_error_logged: bool = False
+
     # ------------------------------------------------------------------
     # GELLO device management
     # ------------------------------------------------------------------
@@ -232,22 +238,45 @@ class GelloIntervention(gym.ActionWrapper):
                                    when arming_hub is set)
             (action,        False) otherwise
         """
-        self._ensure_gello()
+        # Device-open guard (C1): a hardware-open failure (e.g. the
+        # serial port is gone) must not crash the training loop. Log
+        # once, end any engagement, return the policy action.
+        try:
+            self._ensure_gello()
+        except Exception as exc:  # noqa: BLE001 — safety: never crash the loop
+            if not self._device_error_logged:
+                print(
+                    f"[GelloIntervention] device open failed, downgrading to "
+                    f"policy action: {exc}"
+                )
+                self._device_error_logged = True
+            self._force_end_engagement()
+            return action, False
 
         # Engagement bookkeeping (LB edge detection / per-engagement reset).
         self._update_engagement()
 
-        # Read GELLO state (8D: 7 joints + 1 gripper)
-        raw = np.asarray(self._gello.get_joints(), dtype=np.float64)
-        gello_joints = raw[:7]
-        raw_gripper = float(raw[7])
-
-        # Map gripper: GELLO 8th joint -> [-1, 1]
-        # Convention: lower values = closed (-1), higher = open (+1)
-        gripper = np.clip(raw_gripper * 2.0 - 1.0, -1.0, 1.0)
-
-        # Convert joints to Cartesian delta via agent
+        # Device read + gripper extraction + agent.step (C1): a Dynamixel
+        # timeout / USB unplug raises OSError/IOError, and a short or
+        # malformed read raises AssertionError / IndexError. The existing
+        # RuntimeError branch handles agent safety violations; the broad
+        # Exception branch added AFTER it handles device faults — both
+        # downgrade to the policy action instead of propagating.
         try:
+            # Read GELLO state (8D: 7 joints + 1 gripper)
+            raw = np.asarray(self._gello.get_joints(), dtype=np.float64)
+            if raw.shape != (8,):
+                raise ValueError(
+                    f"malformed GELLO read: expected (8,), got {raw.shape}"
+                )
+            gello_joints = raw[:7]
+            raw_gripper = float(raw[7])
+
+            # Map gripper: GELLO 8th joint -> [-1, 1]
+            # Convention: lower values = closed (-1), higher = open (+1)
+            gripper = np.clip(raw_gripper * 2.0 - 1.0, -1.0, 1.0)
+
+            # Convert joints to Cartesian delta via agent
             expert_action, info = self._agent.step(gello_joints, gripper=gripper)
         except RuntimeError as exc:
             # The agent raised on a hard safety violation. Downgrade:
@@ -258,6 +287,17 @@ class GelloIntervention(gym.ActionWrapper):
                     f"policy action: {exc}"
                 )
                 self._budget_overrun_logged = True
+            self._force_end_engagement()
+            return action, False
+        except Exception as exc:  # noqa: BLE001 — safety: never crash the loop
+            # Device fault (USB unplug, serial timeout, short/malformed
+            # read). PLAN-A2 must_have: 设备异常永不中断训练循环.
+            if not self._device_error_logged:
+                print(
+                    f"[GelloIntervention] device error, downgrading to "
+                    f"policy action: {exc}"
+                )
+                self._device_error_logged = True
             self._force_end_engagement()
             return action, False
 
@@ -350,6 +390,7 @@ class GelloIntervention(gym.ActionWrapper):
         self._engagement_active = False
         self._lb_was_held = False
         self._budget_overrun_logged = False
+        self._device_error_logged = False
         return self.env.reset(seed=seed, options=options)
 
     # ------------------------------------------------------------------

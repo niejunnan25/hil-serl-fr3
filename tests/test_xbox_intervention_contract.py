@@ -145,18 +145,29 @@ class TestDeadman:
 # ---------------------------------------------------------------------------
 class TestMapping:
     def test_left_stick_maps_to_dx_dy(self, hub, env7):
+        # I1: full left stick + fine scale de-normalizes to a translation
+        # well past the 3mm/step cap, so the in-toolchain clamp scales the
+        # translation channels DOWN. We assert direction (dx == dy, both
+        # positive) and that the de-normalized norm sits at the cap, not
+        # the old uncapped SCALE_FINE value.
         w = XboxIntervention(env7, hub)
         hub._backend.set_state(XboxState(left_x=1.0, left_y=1.0, rb=True))  # type: ignore[attr-defined]
         a, _ = w.action(np.zeros(7, dtype=np.float32))
-        # Fine scale, full deflection, deadzone removed.
-        assert a[0] == pytest.approx(SCALE_FINE, abs=1e-6)
-        assert a[1] == pytest.approx(SCALE_FINE, abs=1e-6)
+        assert a[0] > 0.0 and a[1] > 0.0
+        assert a[0] == pytest.approx(a[1], abs=1e-6)  # symmetric deflection
+        denorm = np.linalg.norm(a[:3] * w.pos_scale)
+        assert denorm == pytest.approx(w.max_step, abs=1e-9)
 
     def test_right_stick_maps_to_dz_dyaw(self, hub, env7):
+        # right_y -> dz (translation, capped); right_x -> dyaw (rotation,
+        # left untouched by the translation clamp).
         w = XboxIntervention(env7, hub)
         hub._backend.set_state(XboxState(right_x=-1.0, right_y=1.0, rb=True))  # type: ignore[attr-defined]
         a, _ = w.action(np.zeros(7, dtype=np.float32))
-        assert a[2] == pytest.approx(-SCALE_FINE, abs=1e-6)  # -right_y
+        assert a[2] < 0.0  # -right_y direction preserved
+        # dz alone de-normalizes to exactly the cap.
+        assert abs(a[2] * w.pos_scale) == pytest.approx(w.max_step, abs=1e-9)
+        # Rotation channel unaffected by the translation clamp.
         assert a[5] == pytest.approx(-SCALE_FINE, abs=1e-6)
 
     def test_dpad_maps_to_dpitch_droll(self, hub, env7):
@@ -246,9 +257,11 @@ class TestActionSpace:
         assert replaced is True
         # Channels 3..6 untouched.
         assert np.allclose(out_action[3:], policy[3:])
-        # Channels 0..2 come from the expert.
-        assert out_action[0] == pytest.approx(SCALE_FINE, abs=1e-6)
-        assert out_action[1] == pytest.approx(SCALE_FINE, abs=1e-6)
+        # Channels 0..2 come from the expert, capped to 3mm/step.
+        assert out_action[0] > 0.0 and out_action[1] > 0.0
+        assert out_action[0] == pytest.approx(out_action[1], abs=1e-6)
+        denorm = np.linalg.norm(out_action[:3] * w.pos_scale)
+        assert denorm == pytest.approx(w.max_step, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -272,3 +285,78 @@ class TestDegradation:
         a, replaced = w.action(policy)
         assert replaced is False
         assert np.allclose(a, policy)
+
+
+# ---------------------------------------------------------------------------
+# I1 — per-step 3mm translation cap enforced in-toolchain
+# ---------------------------------------------------------------------------
+class TestPerStepTranslationCap:
+    def test_rb_held_full_stick_coarse_caps_denormalized_translation(
+        self, hub, env7
+    ):
+        # Worst case from REVIEW I1: coarse scale (1.0) + full left stick.
+        # Without the cap this de-normalizes to ~100mm/step (33x the cap).
+        w = XboxIntervention(env7, hub, scale=SCALE_COARSE)
+        assert w.scale_mode == "coarse"
+        hub._backend.set_state(XboxState(  # type: ignore[attr-defined]
+            left_x=1.0, left_y=1.0, right_y=-1.0, rb=True
+        ))
+        a, replaced = w.action(np.zeros(7, dtype=np.float32))
+        assert replaced is True
+        denorm = np.linalg.norm(a[:3] * w.pos_scale)
+        assert denorm <= w.max_step + 1e-9
+
+    def test_default_max_step_and_pos_scale(self, hub, env7):
+        w = XboxIntervention(env7, hub)
+        assert w.max_step == pytest.approx(0.003)
+        assert w.pos_scale == pytest.approx(0.1)
+
+    def test_sub_cap_translation_is_left_unchanged_by_clamp(self, hub, env7):
+        # A small deflection whose de-normalized translation is already
+        # under the cap must NOT be touched by the clamp.
+        w = XboxIntervention(env7, hub)
+        # Pick left_x so that, after deadzone + fine scale + pos_scale, the
+        # de-normalized translation is comfortably below max_step.
+        # deadzone-corrected value v -> action = v * SCALE_FINE;
+        # denorm = action * pos_scale must be < max_step=0.003.
+        hub._backend.set_state(XboxState(left_x=0.20, rb=True))  # type: ignore[attr-defined]
+        a, _ = w.action(np.zeros(7, dtype=np.float32))
+        corrected = (0.20 - DEADZONE) / (1.0 - DEADZONE)
+        expected = corrected * SCALE_FINE  # un-clamped value
+        denorm = abs(expected * w.pos_scale)
+        assert denorm < w.max_step  # precondition: sub-cap
+        assert a[0] == pytest.approx(expected, abs=1e-6)  # unchanged
+
+    def test_rb_not_held_full_stick_passes_policy_through_unchanged(
+        self, hub, env7
+    ):
+        # Deadman invariant: RB released -> NEVER modify the policy action,
+        # cap or no cap.
+        w = XboxIntervention(env7, hub, scale=SCALE_COARSE)
+        hub._backend.set_state(XboxState(  # type: ignore[attr-defined]
+            left_x=1.0, left_y=1.0, right_y=-1.0, rb=False
+        ))
+        policy = np.full(7, 0.42, dtype=np.float32)
+        out_action, replaced = w.action(policy)
+        assert replaced is False
+        assert np.allclose(out_action, policy)
+
+    def test_cap_applies_to_action_indices_subset(self, hub, env7):
+        # Subset path must also enforce the cap on translation channels.
+        w = XboxIntervention(
+            env7, hub, scale=SCALE_COARSE, action_indices=np.array([0, 1, 2])
+        )
+        hub._backend.set_state(XboxState(left_x=1.0, left_y=1.0, rb=True))  # type: ignore[attr-defined]
+        policy = np.zeros(7, dtype=np.float32)
+        out_action, replaced = w.action(policy)
+        assert replaced is True
+        denorm = np.linalg.norm(out_action[:3] * w.pos_scale)
+        assert denorm <= w.max_step + 1e-9
+
+    def test_cap_applies_in_6d_env(self, hub, env6):
+        w = XboxIntervention(env6, hub, scale=SCALE_COARSE)
+        hub._backend.set_state(XboxState(left_x=1.0, left_y=1.0, rb=True))  # type: ignore[attr-defined]
+        a, replaced = w.action(np.zeros(6, dtype=np.float32))
+        assert replaced is True
+        denorm = np.linalg.norm(a[:3] * w.pos_scale)
+        assert denorm <= w.max_step + 1e-9

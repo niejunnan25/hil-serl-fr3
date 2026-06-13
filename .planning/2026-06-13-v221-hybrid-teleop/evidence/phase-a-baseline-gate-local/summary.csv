@@ -1,0 +1,5 @@
+status,suite,passed,failed,log
+PASS,gello_intervention_contract,34,0,/tmp/fr3-phase2-readiness-local/gello_intervention_contract.log
+PASS,gello_safety_calibration,25,0,/tmp/fr3-phase2-readiness-local/gello_safety_calibration.log
+PASS,gello_demos_serl,33,0,/tmp/fr3-phase2-readiness-local/gello_demos_serl.log
+PASS,gello_e2e_scaffolding,21,0,/tmp/fr3-phase2-readiness-local/gello_e2e_scaffolding.log

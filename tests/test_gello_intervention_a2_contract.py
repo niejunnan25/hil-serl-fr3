@@ -292,3 +292,123 @@ class TestEnvReset:
         assert w.last_intervene == 0.0
         assert np.allclose(w._agent.initial_pose[:3], w._agent.prev_pose[:3])
         w.close()
+
+
+# ---------------------------------------------------------------------------
+# C1 — device-read exception must never crash the training loop
+# ---------------------------------------------------------------------------
+class TestDeviceErrorNeverCrashes:
+    """PLAN-A2 must_have: 设备异常永不中断训练循环.
+
+    A Dynamixel timeout / USB unplug raises OSError/IOError, and a short
+    or malformed read raises AssertionError. Neither may propagate out of
+    action(); the wrapper must downgrade to (policy, False).
+    """
+
+    def test_get_joints_oserror_returns_policy_no_raise(self, driver, env7):
+        w = gello_intervention.GelloIntervention(env7)
+        driver.set_joints(np.array([0.0] * 7 + [0.5]))
+        w.action(np.zeros(7, dtype=np.float32))  # seed (connection ok)
+
+        # Now the USB cable is yanked mid-training.
+        def _boom():
+            raise OSError("USB unplugged mid-training")
+
+        driver.get_joints = _boom  # type: ignore[assignment]
+
+        policy = np.full(7, 0.23, dtype=np.float32)
+        new_action, replaced = w.action(policy)
+        assert replaced is False, "device read failure must not intervene"
+        assert np.allclose(new_action, policy), "must return the policy action verbatim"
+        w.close()
+
+    def test_get_joints_ioerror_returns_policy_no_raise(self, driver, env7):
+        w = gello_intervention.GelloIntervention(env7)
+        driver.set_joints(np.array([0.0] * 7 + [0.5]))
+        w.action(np.zeros(7, dtype=np.float32))  # seed
+
+        def _boom():
+            raise IOError("serial timeout")
+
+        driver.get_joints = _boom  # type: ignore[assignment]
+
+        policy = np.full(7, -0.4, dtype=np.float32)
+        new_action, replaced = w.action(policy)
+        assert replaced is False
+        assert np.allclose(new_action, policy)
+        w.close()
+
+    def test_malformed_short_read_returns_policy_no_raise(self, driver, env7):
+        """A short/malformed read (length 3) makes raw[7] / shape logic
+        raise; that must be caught and downgraded, not propagate."""
+        w = gello_intervention.GelloIntervention(env7)
+        driver.set_joints(np.array([0.0] * 7 + [0.5]))
+        w.action(np.zeros(7, dtype=np.float32))  # seed
+
+        driver.get_joints = lambda: np.zeros(3, dtype=np.float64)  # type: ignore[assignment]
+
+        policy = np.full(7, 0.11, dtype=np.float32)
+        new_action, replaced = w.action(policy)
+        assert replaced is False
+        assert np.allclose(new_action, policy)
+        w.close()
+
+    def test_device_open_failure_returns_policy_no_raise(self, env7):
+        """A device-open failure (no mock installed -> _ensure_gello
+        raises) must downgrade to (policy, False), not propagate."""
+        # No install_mock here: _GELLO_AVAILABLE may be False (ImportError
+        # path) or the constructor itself raises. Force a hard open failure.
+        gello_intervention._GELLO_AVAILABLE = True
+        orig = gello_intervention.DynamixelDriver
+
+        def _explode(*a, **kw):
+            raise OSError("could not open /dev/ttyUSB0")
+
+        gello_intervention.DynamixelDriver = _explode  # type: ignore[assignment]
+        try:
+            w = gello_intervention.GelloIntervention(env7)
+            policy = np.full(7, 0.5, dtype=np.float32)
+            new_action, replaced = w.action(policy)
+            assert replaced is False
+            assert np.allclose(new_action, policy)
+        finally:
+            gello_intervention.DynamixelDriver = orig
+
+    def test_device_error_logged_only_once(self, driver, env7, capsys):
+        """The device-error message is logged once, not every tick, to
+        avoid flooding the training log."""
+        w = gello_intervention.GelloIntervention(env7)
+        driver.set_joints(np.array([0.0] * 7 + [0.5]))
+        w.action(np.zeros(7, dtype=np.float32))  # seed
+        capsys.readouterr()  # clear seed output
+
+        def _boom():
+            raise OSError("USB unplugged")
+
+        driver.get_joints = _boom  # type: ignore[assignment]
+        policy = np.zeros(7, dtype=np.float32)
+        for _ in range(5):
+            _, replaced = w.action(policy)
+            assert replaced is False
+        out = capsys.readouterr().out
+        # Exactly one device-error log line across the 5 failing ticks.
+        assert out.count("device") <= 1 or out.lower().count("device error") <= 1
+        w.close()
+
+    def test_device_error_flag_cleared_on_reset(self, driver, env7):
+        w = gello_intervention.GelloIntervention(env7)
+        assert w._device_error_logged is False
+        driver.set_joints(np.array([0.0] * 7 + [0.5]))
+        w.action(np.zeros(7, dtype=np.float32))  # seed
+
+        def _boom():
+            raise OSError("USB unplugged")
+
+        driver.get_joints = _boom  # type: ignore[assignment]
+        w.action(np.zeros(7, dtype=np.float32))
+        assert w._device_error_logged is True
+        # Restore a good read so reset()'s _ensure_gello path is happy.
+        driver.get_joints = lambda: np.array([0.0] * 7 + [0.5], dtype=np.float64)  # type: ignore[assignment]
+        w.reset()
+        assert w._device_error_logged is False
+        w.close()

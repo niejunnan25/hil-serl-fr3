@@ -92,19 +92,20 @@ class TestMotionDriver:
         assert r.returncode == 5
         assert "approval required" in r.stderr
 
-    def test_full_mode_with_phrase_but_offline_server_aborts_safely(
-        self, tmp_path
-    ):
+    def test_full_mode_fails_closed_pending_phaseB(self, tmp_path):
+        # C2 (REVIEW-PhaseA): full mode must FAIL CLOSED. The agent emits a
+        # normalized [-1,1] delta action, but /pose expects an ABSOLUTE pose;
+        # POSTing the delta-as-pose would command an uncontrolled motion. The
+        # correct GELLO-leader -> FR3-follower pose reconstruction is Phase B
+        # work, so until then full mode must NOT POST anything: it returns
+        # rc 10 with a clear "disabled / pending Phase B" log and zero /pose.
         log = tmp_path / "full.log"
-        # Approval set, but the server URL is bogus so any POST fails.
-        # The driver should exit non-zero (likely 6 or 9), NOT silently
-        # run forever.
         env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": "I_APPROVE_P2T3_FULL_E2E_MOTION"}
         r = _run(
             [
                 PYTHON_BIN, str(DRIVER),
                 "--mode", "full",
-                "--server", "http://127.0.0.1:1/",  # nothing listens here
+                "--server", "http://127.0.0.1:1/",  # must never be contacted
                 "--hz", "20",
                 "--duration", "0.3",
                 "--log", str(log),
@@ -112,9 +113,16 @@ class TestMotionDriver:
             env=env,
             timeout=15,
         )
-        assert r.returncode in (6, 8, 9)
+        # rc 10 is the fail-closed path, which returns BEFORE any network
+        # call. (Had it attempted the POST, the bogus :1 server would have
+        # produced rc 9 instead — so rc==10 itself proves no /pose was sent.)
+        assert r.returncode == 10, (r.returncode, r.stdout, r.stderr)
         text = log.read_text()
-        assert "[FULL]" in text
+        assert "DISABLED" in text
+        assert "pending Phase B" in text
+        assert "no /pose issued" in text
+        # Never reached the per-tick streaming loop / a server rejection.
+        assert "server rejected" not in text
 
 
 # ---------------------------------------------------------------------------

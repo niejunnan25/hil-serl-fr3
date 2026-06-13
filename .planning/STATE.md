@@ -12,7 +12,7 @@
 
 ```
 v2.1.1 progress: Phase 1 ⏳ | Phase 2 ⏳ | Phase 3 ⏳ | Phase 4 ⏳ | Phase 5 ⏳ (0/5)
-v2.2.1 progress: PAUSED — Phase A ✅ CLOSED 2026-06-13；Phase B 待 motion session（用户现场/E-stop/Xbox），物理前置未就绪
+v2.2.1 progress: PAUSED — Phase A ✅ CLOSED + A6 gap-closure ✅ 2026-06-13（review 2 critical+7 important 全修，225 passed，见 evidence/phase-a-A6-gate.md）；Phase B 待 motion session（用户现场/E-stop/Xbox），物理前置未就绪
 v2.2 progress:   Phase 1 ✅ CLOSED | Phase 2 🟡 5/6 (P2-T3 待 motion 批准) | Phase 6 ⏳ (sim, 留 v2.2)
 ```
 

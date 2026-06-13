@@ -30,12 +30,15 @@
 #         Does NOT call /pose or any motion endpoint.
 #         Exit 0 on success.
 #
-#   4. motion (FULL E2E — APPROVED)
-#         GELLO read -> FK -> Cartesian delta -> normalize -> POST /pose.
-#         Streams at $HZ (default 10) for $DURATION seconds.
+#   4. motion (FULL E2E — APPROVED, currently FAIL-CLOSED)
+#         GELLO read -> FK -> Cartesian delta -> normalize -> (would) POST /pose.
+#         Invokes the driver with --mode full. The driver currently
+#         FAILS CLOSED (rc 10, no /pose issued): the normalized delta ->
+#         absolute /pose conversion is pending Phase B server-contract
+#         verification (REVIEW-PhaseA C2). Until then this mode exits 32
+#         without sending any motion command.
 #         Requires FR3_GELLO_E2E_APPROVAL set to the approval phrase.
 #         Logs to artifacts/logs/p2-t3-e2e-motion-<ts>.log.
-#         Exit 0 on success, 31 on any safety violation.
 #
 # Approval phrase:  FR3_GELLO_E2E_APPROVAL=I_APPROVE_P2T3_FULL_E2E_MOTION
 #
@@ -270,8 +273,10 @@ motion() {
     require_approval "motion"
 
     echo "=============================================="
-    echo " P2-T3 e2e motion — FULL STREAM"
-    echo "  GELLO -> FK -> delta -> normalize -> POST /pose"
+    echo " P2-T3 e2e motion — FULL STREAM (FAIL-CLOSED)"
+    echo "  GELLO -> FK -> delta -> normalize -> (would) POST /pose"
+    echo "  NOTE: driver --mode full is fail-closed pending Phase B"
+    echo "        (REVIEW-PhaseA C2); no /pose will be issued (exit 32)."
     echo "  ROBOT=${ROBOT_IP}  SERVER=${FRANKA_SERVER_URL}"
     echo "  HZ=${HZ}  DURATION=${DURATION}s"
     echo "=============================================="
@@ -308,6 +313,7 @@ motion() {
 
     set +e
     "${PYTHON_BIN}" "${driver}" \
+        --mode full \
         --server "${FRANKA_SERVER_URL}" \
         --robot-ip "${ROBOT_IP}" \
         --gello-port "${GELLO_PORT}" \
@@ -328,6 +334,13 @@ motion() {
         9)
             err "franka_server rejected a /pose command (see ${log_file})."
             exit 9
+            ;;
+        10)
+            err "FULL E2E disabled: GELLO->follower /pose conversion pending"
+            err "Phase B server-contract verification (REVIEW-PhaseA C2);"
+            err "no /pose issued. Implement + verify the pose reconstruction"
+            err "in Phase B (B1) before this mode can stream. See ${log_file}."
+            exit 32
             ;;
         *)
             err "Motion stream exited with unexpected rc=${rc} (see ${log_file})."

@@ -6,11 +6,14 @@ Phase A only exercises the driver in --dry-run and --micro modes;
 without an operator in the loop with the E-stop.
 
 The driver is intentionally minimal: it opens GELLO, reads joints at
-HZ, feeds them through GelloCartesianDeltaAgent, and POSTs the
-resulting 7D action to the franka_server's /pose endpoint. The
-agent's own safety checks (max_step / max_total_delta) abort the
-stream; the driver translates that into a non-zero exit so the shell
-can record the failure.
+HZ, and feeds them through GelloCartesianDeltaAgent. dry-run / micro
+exercise the FK + safety pipeline without touching the robot.
+
+--full FAILS CLOSED (returns rc 10, no /pose) pending Phase B: the
+agent emits a normalized [-1,1] delta but /pose expects an absolute
+pose, so the GELLO-leader -> FR3-follower pose reconstruction must be
+implemented and verified against the live server contract in Phase B
+(B1) before any motion is streamed. See REVIEW-PhaseA C2.
 """
 
 from __future__ import annotations
@@ -110,13 +113,6 @@ class _SyntheticDriver:
         self.closed = True
 
 
-def _post_pose(url: str, pose: np.ndarray, timeout: float = 5.0) -> None:
-    import requests
-    payload = {"arr": list(pose)}
-    r = requests.post(url.rstrip("/") + "/pose", json=payload, timeout=timeout)
-    r.raise_for_status()
-
-
 def _send_dry(agent: GelloCartesianDeltaAgent, driver, hz: float, log_fp) -> int:
     """Mode: --dry-run. Print the would-be pose; never POST. Always
     safe to run — no approval needed by the driver itself, but the
@@ -166,36 +162,27 @@ def _send_full(
     agent: GelloCartesianDeltaAgent, driver, hz: float, duration: float,
     server_url: str, log_fp,
 ) -> int:
-    """Mode: --full. POST /pose at HZ for DURATION seconds. Approval
-    must already be set by the caller (shell gate).
+    """Mode: --full. FAIL CLOSED — never POST (REVIEW-PhaseA C2).
+
+    The agent emits a NORMALIZED 7D delta action [dx,dy,dz,droll,dpitch,
+    dyaw,gripper] in [-1,1], but franka_server's /pose endpoint expects an
+    ABSOLUTE pose [x,y,z,qx,qy,qz,qw]. POSTing the normalized delta as an
+    absolute pose would drive the EE toward the origin with a non-unit
+    quaternion — a large, uncontrolled real-robot motion.
+
+    The correct GELLO-leader -> FR3-follower absolute-pose reconstruction
+    (read the follower's current pose, apply the raw Cartesian delta,
+    compose a valid unit-quaternion target) must be implemented and
+    verified against the LIVE /pose contract in Phase B (B1), with the
+    robot + operator + E-stop in the loop. Until then full mode refuses
+    to issue any motion command.
     """
-    dt = 1.0 / hz
-    end = time.monotonic() + duration
-    tick = 0
-    while time.monotonic() < end:
-        joints = driver.get_joints()[:7]
-        action, info = agent.step(joints, gripper=0.0)
-        log_fp.write(
-            f"[FULL] t={tick} step={info['step_delta_norm']:.6f} "
-            f"total={info['total_delta_norm']:.6f} safe={info['safe']}\n"
-        )
-        if not info["safe"]:
-            log_fp.write(f"[FULL] safety violation: {info['violation']}\n")
-            log_fp.flush()
-            return 8
-        # Convert the agent's 7D action back to a pose via the inverse
-        # of the agent's normalize_action; for Phase A we POST the
-        # action directly as the pose (server-side interpretation).
-        try:
-            _post_pose(server_url, action)
-        except Exception as e:
-            log_fp.write(f"[FULL] server rejected /pose: {e}\n")
-            log_fp.flush()
-            return 9
-        tick += 1
-        time.sleep(dt)
+    log_fp.write(
+        "[FULL] DISABLED: GELLO->follower absolute /pose conversion pending "
+        "Phase B server-contract verification (REVIEW-PhaseA C2); no /pose issued\n"
+    )
     log_fp.flush()
-    return 0
+    return 10
 
 
 def main() -> int:

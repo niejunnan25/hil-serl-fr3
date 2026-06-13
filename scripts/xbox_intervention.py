@@ -27,11 +27,14 @@ the same numbers — single source of truth):
 6D env (no gripper channel) -> gripper_enabled=False, RT/LT ignored.
 
 Safety semantics:
-    * max_step=0.003 m / max_total_delta=0.03 m follow the same
-      constants as GelloIntervention by reusing the shared agent. The
-      wrapper does NOT apply max_step/max_total_delta directly — those
-      remain owned by the action policy stack (the HIL-SERL env), so
-      we never silently clamp the operator.
+    * max_step=0.003 m per-step translation cap is enforced *inside* this
+      wrapper (REVIEW I1). The de-normalized translation
+      ||action[:3] * pos_scale|| is clamped to <= max_step so the 3mm/step
+      invariant cannot be bypassed via the Xbox path, independent of any
+      downstream env clamp. Direction is preserved (uniform scaling of the
+      [dx, dy, dz] triple). Rotation and gripper channels are NOT clamped
+      here — rotational/total-delta limits remain owned by the action
+      policy stack (the HIL-SERL env).
 """
 
 from __future__ import annotations
@@ -89,12 +92,21 @@ class XboxIntervention(gym.ActionWrapper):
         scale: float = SCALE_FINE,
         deadzone: float = DEADZONE,
         action_indices: Optional[np.ndarray] = None,
+        max_step: float = 0.003,
+        pos_scale: float = 0.1,
     ):
         super().__init__(env)
         self.hub = hub
         self.scale = float(scale)
         self.deadzone = float(deadzone)
         self.action_indices = action_indices
+        # I1: enforce the per-step translation cap *inside* the teleop
+        # toolchain so the 3mm/step invariant cannot be bypassed via the
+        # Xbox path, regardless of whether the downstream env clamps.
+        # ``pos_scale`` is the env's normalized->metres gain (env pos_scale)
+        # and ``max_step`` is the metres-per-step ceiling.
+        self.max_step = float(max_step)
+        self.pos_scale = float(pos_scale)
 
         # Gripper detection: matches GelloIntervention / Spacemouse.
         self.gripper_enabled = self.action_space.shape == (FULL_ACTION_DIM,)
@@ -147,7 +159,19 @@ class XboxIntervention(gym.ActionWrapper):
             else:
                 action[GRIPPER_IDX] = 0.0
 
-        return np.clip(action, -1.0, 1.0)
+        action = np.clip(action, -1.0, 1.0)
+
+        # I1: cap the per-step *de-normalized* translation. The normalized
+        # translation channels [dx, dy, dz] scale to metres by pos_scale;
+        # if that exceeds max_step, shrink the translation triple uniformly
+        # so the de-normalized norm sits exactly at max_step (direction
+        # preserved). Rotation (3..5) and gripper (6) are untouched.
+        xyz = action[DX_IDX : DZ_IDX + 1] * self.pos_scale
+        denorm = float(np.linalg.norm(xyz))
+        if denorm > self.max_step:
+            action[DX_IDX : DZ_IDX + 1] *= self.max_step / denorm
+
+        return action
 
     def _toggle_scale(self, s: XboxState) -> None:
         """Y button edge toggle: fine <-> coarse."""

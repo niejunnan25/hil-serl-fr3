@@ -19,12 +19,21 @@ Switch tick
     produces no command jump** (continuous trajectory).
 
 Xbox segment
-  * Maps Xbox state to 7D action via XboxIntervention._state_to_action.
-  * Adds the action to the current joint positions (in a simple
+  * Maps Xbox state to a 7D JOINT-space delta via a hand-rolled
+    PLACEHOLDER mapping (``_xbox_action_to_joint_delta``). This is NOT
+    the cartesian mapping used by ``XboxIntervention._state_to_action``;
+    the two action spaces differ on purpose for Phase A. B4 (real-device
+    fine-scale) will replace this placeholder with a measured Jacobian so
+    the recorder's joint trajectory matches the policy's cartesian Xbox
+    intervention.
+  * Adds the delta to the current joint positions (in a simple
     proportional way) so the demo's `target` field is a joint-space
     trajectory, matching the existing record format.
-  * The Xbox mapping constants are imported from xbox_intervention —
-    single source of truth, no duplication.
+  * The stick deadzone constant (``DEADZONE``) is imported from
+    xbox_intervention — single source of truth for that value.
+  * The gripper channel (RT close / LT open) is read from the Xbox state
+    during the Xbox segment, matching xbox_intervention's RT/LT mapping
+    (RT>0.05 -> +1.0, LT>0.05 -> -1.0, else 0.0).
 
 Output schema
   * Reuses record_gello_demos_serl.save_demo() so the on-disk format is
@@ -50,23 +59,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from xbox_intervention import XboxIntervention  # noqa: E402
-from xbox_intervention import XboxState  # noqa: E402
-from xbox_intervention import (  # noqa: E402
-    DEADZONE,
-    DZ_IDX,
-    DPITCH_IDX,
-    DROLL_IDX,
-    DX_IDX,
-    DY_IDX,
-    DYAW_IDX,
-    GRIPPER_IDX,
-    SCALE_FINE,
-)
-from teleop_hub import (  # noqa: E402
-    MockJoystickBackend,
-    TeleopDeviceHub,
-)
+# Only DEADZONE and XboxState are actually used here. The Xbox segment
+# uses a hand-rolled JOINT-space mapping (B4 placeholder), NOT
+# XboxIntervention's cartesian mapping, so the IDX/scale constants and
+# the XboxIntervention class are intentionally not imported.
+from xbox_intervention import DEADZONE, XboxState  # noqa: E402
 
 # Defaults copied from record_gello_demos_serl so the GELLO segment
 # behaves identically.
@@ -174,10 +171,6 @@ class HybridStateMachine:
             return target, False, total_delta
         return target, True, step_delta
 
-    @staticmethod
-    def _clip_to_limits(target: np.ndarray) -> np.ndarray:
-        return np.clip(target, FR3_LOWER_LIMITS + 0.02, FR3_UPPER_LIMITS - 0.02)
-
     # ------------------------------------------------------------------
     # Switch tick — freezes the target to the actual robot pose so the
     # Xbox segment has zero command discontinuity.
@@ -198,15 +191,18 @@ class HybridStateMachine:
         return self.xbox_q0.copy()
 
     # ------------------------------------------------------------------
-    # Xbox segment — reuses the XboxIntervention mapping constants.
-    # The action is interpreted in joint space: small additive deltas
-    # scaled to ~0.5° per unit action. This is intentionally a simple
-    # linear mapping for Phase A; B4 (real-device fine-scale) will
-    # replace this with a measured joint-vs-EE Jacobian.
+    # Xbox segment — hand-rolled JOINT-space PLACEHOLDER mapping.
+    # The sticks map to small additive JOINT deltas scaled to ~0.5° per
+    # unit action. This is intentionally a simple linear mapping for
+    # Phase A and is NOT the cartesian mapping used by
+    # XboxIntervention._state_to_action; B4 (real-device fine-scale) will
+    # replace this with a measured joint-vs-EE Jacobian so the recorded
+    # joint trajectory matches the policy's cartesian Xbox intervention.
+    # Only the stick deadzone constant (DEADZONE) is shared.
     # ------------------------------------------------------------------
     @staticmethod
     def _xbox_action_to_joint_delta(state: XboxState, scale: float = 0.0087) -> np.ndarray:
-        """Convert XboxState to a 7D joint delta.
+        """Convert XboxState sticks to a 7D JOINT-space delta (placeholder).
 
         Args:
             state: Xbox state from the hub.
@@ -214,8 +210,10 @@ class HybridStateMachine:
                    (default 0.0087 rad ~ 0.5 deg — placeholder for B4).
 
         Returns:
-            7D delta added to the current joint position. Gripper is
-            mapped to the 7th component of the target (not appended).
+            7D delta added to the current joint position. The gripper is
+            NOT part of this delta — it is read from the Xbox RT/LT
+            triggers and recorded separately as ``gripper_states``
+            (see ``xbox_gripper_value``).
         """
         def dz(v: float) -> float:
             if abs(v) < DEADZONE:
@@ -235,6 +233,21 @@ class HybridStateMachine:
         # gripper_states, not as joint 6. This keeps the target vector
         # strictly joint positions (7D) as the SERL loader expects.
         return delta
+
+    @staticmethod
+    def xbox_gripper_value(state: XboxState) -> float:
+        """Map the Xbox triggers to a gripper command, matching
+        ``xbox_intervention.py`` (RT close wins over LT open):
+
+            RT > 0.05 -> +1.0 (close)
+            LT > 0.05 -> -1.0 (open)
+            else      ->  0.0 (hold)
+        """
+        if state.rt > 0.05:
+            return 1.0
+        if state.lt > 0.05:
+            return -1.0
+        return 0.0
 
     def xbox_step(
         self, state: XboxState
@@ -389,7 +402,17 @@ class HybridRecorder:
                 break
 
             joint_poses.append(actual.copy())
-            gripper_states.append(float(raw_all[-1]))
+            # Gripper source depends on the active segment. In the GELLO
+            # segment the gripper is the 8th GELLO channel; in the Xbox
+            # segment (incl. the switch tick, where sm.mode is already
+            # MODE_XBOX) it comes from the Xbox RT/LT triggers. Taking
+            # raw_all[-1] unconditionally dropped the operator's Xbox
+            # gripper input during the insertion-fine segment (I4).
+            if sm.mode == MODE_XBOX:
+                gripper = HybridStateMachine.xbox_gripper_value(xbox_state)
+            else:
+                gripper = float(raw_all[-1])
+            gripper_states.append(gripper)
             timestamps.append(t)
             raw_gello_log.append(raw_all.copy())
             targets.append(target.copy())
@@ -469,7 +492,10 @@ def main():
         # Small left-stick deflection during the Xbox segment.
         states[i] = XboxState(rb=True, left_x=0.5)
 
-    q0 = np.zeros(7)
+    # Anchor at a valid in-limits home pose. Using np.zeros(7) tripped
+    # the joint-4/6 limit clip on tick 0 (~0.19 rad jump >> max_step),
+    # which aborted at step 0 and produced a silent empty no-op (I7).
+    q0 = FR3_DEFAULT_JOINTS.copy()
     raw_gello0 = gello[0][:7]
     rec = HybridRecorder(
         output_dir=args.output_dir,
@@ -482,6 +508,11 @@ def main():
     path = rec.run_dry(gello, states, q0, raw_gello0, duration=args.duration)
     if path:
         print(f"Hybrid demo saved: {path}")
+    else:
+        # run_dry returns None on an empty/aborted-at-tick-0 episode.
+        # Surface a diagnostic instead of exiting silently.
+        print("[ABORT] no demo saved (reason=aborted before first sample)")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

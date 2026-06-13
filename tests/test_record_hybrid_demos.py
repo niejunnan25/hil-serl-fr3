@@ -14,8 +14,10 @@ drive the state machine. Verifies:
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pytest
@@ -293,3 +295,104 @@ class TestRecorder:
         devices = data["active_device"].tolist()
         assert all(d == MODE_GELLO for d in devices)
         assert int(data["switch_step"]) == -1
+
+    def test_xbox_segment_records_xbox_gripper_not_gello(self, tmp_path):
+        """I4: during the Xbox segment the gripper must come from the Xbox
+        RT/LT triggers (RT>0.05 -> +1.0 close, LT>0.05 -> -1.0 open, else 0),
+        NOT from the GELLO 8th channel (which is held at 0.5 here).
+
+        The GELLO segment must still record the GELLO channel (0.5).
+        """
+        n = 40
+        switch_at = n // 2
+        gello = make_gello_stream(n, max_delta=0.0002)  # 8th channel == 0.5
+        # Switch halfway; from the switch tick onward hold RT=1.0 (close).
+        states = [XboxState(rb=False) for _ in range(n)]
+        states[switch_at] = XboxState(rb=True, rt=1.0)
+        for i in range(switch_at + 1, n):
+            states[i] = XboxState(rb=True, rt=1.0)
+        rec = HybridRecorder(
+            output_dir=str(tmp_path),
+            hz=20.0,
+            leader_scale=0.5,
+            max_step=0.05,
+            max_total_delta=0.5,
+        )
+        q0 = np.array([0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0])
+        path = rec.run_dry(gello, states, q0=q0, raw_gello0=np.zeros(7), duration=2.0)
+        assert path is not None
+        data = np.load(path, allow_pickle=True)
+        grip = data["gripper_states"]
+        devices = data["active_device"].tolist()
+        # GELLO ticks keep the GELLO channel value (0.5).
+        for i in range(switch_at):
+            assert devices[i] == MODE_GELLO
+            assert grip[i] == pytest.approx(0.5), (
+                f"GELLO tick {i} gripper should be the GELLO channel 0.5"
+            )
+        # Switch tick + Xbox ticks with RT=1.0 -> +1.0 (close), NOT 0.5.
+        for i in range(switch_at, n):
+            assert grip[i] == pytest.approx(1.0), (
+                f"Xbox tick {i} gripper should be +1.0 from RT, got {grip[i]}"
+            )
+
+    def test_xbox_segment_gripper_open_and_neutral(self, tmp_path):
+        """I4 follow-up: LT>0.05 -> -1.0 (open); no trigger -> 0.0."""
+        n = 30
+        switch_at = 10
+        gello = make_gello_stream(n, max_delta=0.0002)
+        states = [XboxState(rb=False) for _ in range(n)]
+        states[switch_at] = XboxState(rb=True, lt=1.0)  # open on switch tick
+        for i in range(switch_at + 1, n):
+            # Neutral triggers -> gripper 0.0.
+            states[i] = XboxState(rb=True)
+        rec = HybridRecorder(
+            output_dir=str(tmp_path),
+            hz=20.0,
+            leader_scale=0.5,
+            max_step=0.05,
+            max_total_delta=0.5,
+        )
+        q0 = np.array([0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0])
+        path = rec.run_dry(gello, states, q0=q0, raw_gello0=np.zeros(7), duration=1.5)
+        assert path is not None
+        data = np.load(path, allow_pickle=True)
+        grip = data["gripper_states"]
+        # Switch tick had LT=1.0 -> -1.0 (open).
+        assert grip[switch_at] == pytest.approx(-1.0)
+        # Subsequent Xbox ticks: no trigger -> 0.0.
+        for i in range(switch_at + 1, n):
+            assert grip[i] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# CLI dry-run self-check (I7)
+# ---------------------------------------------------------------------------
+class TestCLIDryRun:
+    def test_cli_dry_run_saves_a_demo(self, tmp_path):
+        """I7: the dry-run CLI must actually produce a saved demo, not a
+        silent no-op (which happened when q0 = zeros tripped the joint
+        limit clip on tick 0)."""
+        script = ROOT / "scripts" / "record_hybrid_demos.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--dry-run",
+                "--duration",
+                "1",
+                "--output-dir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, (
+            f"CLI exited {proc.returncode}\nstdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+        assert "saved" in proc.stdout.lower(), (
+            f"expected a 'saved' message, got stdout:\n{proc.stdout}"
+        )
+        npz_files = list(tmp_path.glob("hybrid_demo_*.npz"))
+        assert npz_files, "no .npz demo was written by the dry-run CLI"
