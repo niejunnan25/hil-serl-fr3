@@ -400,19 +400,26 @@ def main() -> int:
     # in plug_scene_viewer.py via spawn_from_usd).
     # -----------------------------------------------------------------------
     spawned: list[str] = []
-    # NOTE: the manipulated object is the strip's OWN tail-cord 3-pin (三脚) plug
-    # (built inside spawn_six_outlet_strip), NOT a separate plug. Re-inserting the
-    # strip's own cord plug into one of its own 五孔 outlets keeps the loop
-    # DE-ENERGIZED = safe for real-robot RL (user decision 2026-06-13). The old
-    # standalone cn_two_pin_plug is intentionally not spawned.
-    # 公牛 GN-109K 六口排插 (with its tail cord + 三脚 plug) — primitives, no pxr.
+    # Authored USD assets (generate_gn109k_usd.py): real GN-109K strip with
+    # recessed 五孔 outlets + the strip's own 三脚 tail-cord plug. The plug is the
+    # manipulated object, re-inserted into a 五孔 outlet (de-energized self-loop =
+    # safe for real RL). Both USD are Z-up, bottom on table top z=0.
+    STRIP_USD = "/home/robot/plug_insertion_sim/sim-scene/cn_gn109k_strip.usd"
+    PLUG_USD = "/home/robot/plug_insertion_sim/sim-scene/cn_gn109k_plug.usd"
     try:
-        strip_paths = spawn_six_outlet_strip(sim_utils, ENV_ROOT, STRIP_BASE)
-        spawned.extend(strip_paths)
-        print(f"[fullscene] strip=OK {len(strip_paths)} prims "
-              f"(GN-109K: 6x五孔/universal outlets 2x3 + red master switch + cord) base={STRIP_BASE}", flush=True)
+        sc = sim_utils.UsdFileCfg(usd_path=STRIP_USD)
+        sc.func(f"{ENV_ROOT}/Strip", sc, translation=(0.45, 0.0, 0.0))
+        spawned.append(f"{ENV_ROOT}/Strip")
+        print(f"[fullscene] strip_usd=OK <- {STRIP_USD}", flush=True)
     except Exception as exc:
-        print(f"[fullscene] strip=FAILED : {exc}", flush=True)
+        print(f"[fullscene] strip_usd=FAILED {exc}", flush=True)
+    try:
+        pc = sim_utils.UsdFileCfg(usd_path=PLUG_USD)
+        pc.func(f"{ENV_ROOT}/Plug", pc, translation=(0.30, 0.06, 0.0))
+        spawned.append(f"{ENV_ROOT}/Plug")
+        print(f"[fullscene] plug_usd=OK <- {PLUG_USD}", flush=True)
+    except Exception as exc:
+        print(f"[fullscene] plug_usd=FAILED {exc}", flush=True)
 
     # -----------------------------------------------------------------------
     # STEP 6: create the camera sensor (PLAIN /World path -- single env, no

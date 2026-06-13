@@ -109,3 +109,22 @@ P6 worktree/分支清理仍因并发 ultracode 会话暂缓。SR-04 deferred run
   可出 close-up 复核。
 - 工具: `generate_socket_strip_usd.py`(独立 USD 生成器, 备用; 因 pxr 仅 app 内可用改为 viewer 内 primitive 直生),
   `_zed_capture.py`(ZED 抓帧)。
+
+---
+
+## 2026-06-13（续3）— 做出真正的国标五孔 USD 资产
+
+用户决策：**找/做一个真正的国标五孔 USD**。FIND 结论：开放平台无合规 CN 五孔 资产（全是欧/英标），
+Chinese 站(爱给网)许可不清 → **MAKE**。
+
+- **新资产（已入库）**：
+  - `evidence/.../cn_gn109k_strip.usd`（9KB）— 公牛 GN-109K 机身 204×92×29mm、**6 个真凹陷五孔**
+    （白色边框网格凸起 + 灰色凹底 = 真实凹槽，非贴图）、每孔 GB 五孔（三极品字 + 两极）、红色总控、侧出线；
+    UsdPreviewSurface 材质 + kinematic + box collision。
+  - `evidence/.../cn_gn109k_plug.usd`（2.5KB）— 排插自带尾线**三脚插头**（品字三脚 + 机身），dynamic rigid + convexHull collision（可抓取操作物）。
+  - 生成器 `generate_gn109k_usd.py`（headless Kit→pxr 直接 author，含真凹槽 frame-grid 法）。
+- **关键修复**：USD `defaultPrim` 必须是顶层 prim（最初建在 `/World/GN109K` 下导致 defaultPrim 无效、
+  reference 拉不进几何 → 渲染空白）。改到顶层 `/GN109K`、材质移入 root 子树后正常。
+- viewer 改为 spawn 这两个 USD（替代 viewer 内 primitive）。渲染 `capture_usdasset_03.png`：
+  六个凹陷五孔孔位 + 红开关 + 三脚插头 + FR3 + 桌，清晰可辨（RGB mean 92.5）。
+- 五孔单孔细节在远景偏小，可出 close-up 复核（待定）。
