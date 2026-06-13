@@ -143,26 +143,29 @@ def spawn_six_outlet_strip(sim_utils, parent_path, base=STRIP_BASE):
     sz = H - sd / 2.0 + 0.0008                      # dark slots flush w/ top, recessed down
     sp = _STRIP_SLOT_SPACING
     idx = 0
-    for r, ry in enumerate(_ROW_Y):
-        kind = "triple" if r == 0 else "double"     # top row 三口(三极), bottom row 双口(两极)
+    # All 6 outlets are universal 五孔 (per user): 三极 品字 (ground on top + two
+    # splayed L/N flats) ABOVE 两极 (two vertical L/N flats) = 5 holes each.
+    for ry in _ROW_Y:
         for cx in _COL_X:
             box(f"Strip_Patch_{idx}", (cx, ry, H + 0.00075), _PATCH, _C_PATCH)
-            if kind == "double":                    # 两极: 2 vertical flats
-                for dx in (-sp / 2, sp / 2):
-                    box(f"Strip_O{idx}_{'L' if dx < 0 else 'R'}", (cx + dx, ry, sz), _STRIP_SLOT, _C_SLOT)
-            else:                                   # 三极 品字: ground on top + 2 flats below
-                box(f"Strip_O{idx}_gnd", (cx, ry + 0.008, sz), (_GND[0], _GND[1], sd), _C_SLOT)
-                for dx in (-sp / 2, sp / 2):
-                    box(f"Strip_O{idx}_{'L' if dx < 0 else 'R'}", (cx + dx, ry - 0.004, sz), _STRIP_SLOT, _C_SLOT)
+            box(f"Strip_O{idx}_E", (cx, ry + 0.012, sz), (_GND[0], _GND[1], sd), _C_SLOT)  # ground E (top)
+            for dx in (-0.0072, 0.0072):                                                    # 三极 L/N (splayed)
+                box(f"Strip_O{idx}_t{'L' if dx < 0 else 'R'}", (cx + dx, ry + 0.004, sz), _STRIP_SLOT, _C_SLOT)
+            for dx in (-sp / 2, sp / 2):                                                    # 两极 L/N (vertical)
+                box(f"Strip_O{idx}_b{'L' if dx < 0 else 'R'}", (cx + dx, ry - 0.010, sz), _STRIP_SLOT, _C_SLOT)
             idx += 1
     # red 总控 master switch near +X end
     box("Strip_Switch", (0.090, 0.0, H + 0.004), (0.014, 0.030, 0.008), _C_SWITCH)
-    # side power cord (-X end) + 3-pin wall plug
-    box("Strip_Cord", (-0.128, 0.0, 0.007), (0.050, 0.008, 0.008), _C_CORD)
-    box("Strip_WallPlug", (-0.170, 0.0, 0.011), (0.030, 0.024, 0.020), _C_BODY)
-    for dy in (-0.0095, 0.0095):
-        box(f"Strip_WallPin_{'L' if dy < 0 else 'R'}", (-0.190, dy, 0.011), (0.012, 0.0016, 0.006), _C_METAL)
-    box("Strip_WallPin_G", (-0.190, 0.0, 0.019), (0.012, 0.0016, 0.006), _C_METAL)
+    # tail cord (out the -X end) ending in the strip's OWN 3-pin (三脚) plug. THIS
+    # plug is the manipulated object: the FR3 re-inserts it into one of the strip's
+    # own 五孔 outlets (de-energized self-loop = safe for real RL). Resting on the
+    # table, blades pointing +X toward the strip (insertion direction).
+    box("Strip_Cord", (-0.128, 0.0, 0.006), (0.052, 0.009, 0.009), _C_CORD)
+    px = -0.182                                    # 三脚 plug body center (local X)
+    box("Strip_Plug_Body", (px, 0.0, 0.013), (0.034, 0.027, 0.026), _C_BODY)
+    box("Strip_Plug_PinE", (px + 0.025, 0.0, 0.020), (0.016, 0.0032, 0.0016), _C_METAL)   # ground (top, longer)
+    for dy in (-0.0064, 0.0064):                                                          # L/N blades (splayed)
+        box(f"Strip_Plug_Pin{'L' if dy < 0 else 'R'}", (px + 0.024, dy, 0.0085), (0.014, 0.0016, 0.0050), _C_METAL)
     return paths
 
 
@@ -397,22 +400,17 @@ def main() -> int:
     # in plug_scene_viewer.py via spawn_from_usd).
     # -----------------------------------------------------------------------
     spawned: list[str] = []
-    # 2-pin plug (cn_two_pin_plug USD), pins up so they are visible.
-    try:
-        plug_cfg = sim_utils.UsdFileCfg(usd_path=cli_args.plug_usd)
-        plug_cfg.func(f"{ENV_ROOT}/Plug", plug_cfg,
-                      translation=PLUG_TRANSLATION, orientation=PLUG_ORIENT)
-        spawned.append(f"{ENV_ROOT}/Plug")
-        print(f"[fullscene] usd=OK {ENV_ROOT}/Plug <- {cli_args.plug_usd} "
-              f"translation={PLUG_TRANSLATION} orientation={PLUG_ORIENT}", flush=True)
-    except Exception as exc:
-        print(f"[fullscene] usd=FAILED Plug : {exc}", flush=True)
-    # 公牛/红牛 六口排插 — built from primitives (no USD file / no pxr needed).
+    # NOTE: the manipulated object is the strip's OWN tail-cord 3-pin (三脚) plug
+    # (built inside spawn_six_outlet_strip), NOT a separate plug. Re-inserting the
+    # strip's own cord plug into one of its own 五孔 outlets keeps the loop
+    # DE-ENERGIZED = safe for real-robot RL (user decision 2026-06-13). The old
+    # standalone cn_two_pin_plug is intentionally not spawned.
+    # 公牛 GN-109K 六口排插 (with its tail cord + 三脚 plug) — primitives, no pxr.
     try:
         strip_paths = spawn_six_outlet_strip(sim_utils, ENV_ROOT, STRIP_BASE)
         spawned.extend(strip_paths)
         print(f"[fullscene] strip=OK {len(strip_paths)} prims "
-              f"(3 double + 3 triple outlets + red switch + cord) base={STRIP_BASE}", flush=True)
+              f"(GN-109K: 6x五孔/universal outlets 2x3 + red master switch + cord) base={STRIP_BASE}", flush=True)
     except Exception as exc:
         print(f"[fullscene] strip=FAILED : {exc}", flush=True)
 
