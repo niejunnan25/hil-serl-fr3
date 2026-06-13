@@ -10,9 +10,13 @@ FR3 真机插插头（CN 两脚插头→插座）HIL-SERL 项目：SERL/RLPD + r
 
 ## 当前 milestone
 
-**v2.2.1 Hybrid Teleop + 完整过程训练**（接管 v2.2 Phase 3–5）——
+**v2.1.1 Sim Runtime Fix**（2026-06-13 立项）—— 修 v2.1 (sim-build-fork) 审计发现的 P1-P7：
+IsaacLab 插头场景黑屏/卡启动、repo `sim/` ↔ desktop 场景脚本分叉、图像 schema 不一致、
+orphan 进程、分支混杂、文档丢失。详见 `2026-06-13-v211-sim-runtime-fix/`（AUDIT/DECISIONS/REQUIREMENTS）+ ROADMAP.md。
+
+**v2.2.1 Hybrid Teleop + 完整过程训练**（接管 v2.2 Phase 3–5）—— **暂停**，待 v2.1.1 完成后恢复。
 GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy。
-详见 ROADMAP.md 与 2026-06-13-v221-hybrid-teleop/DECISIONS.md。
+详见 2026-06-13-v221-hybrid-teleop/DECISIONS.md。
 v2.3 候选：RLDG 蒸馏 SAC specialist 数据进 pi05。
 
 ## 执行策略（用户 2026-06-13 决议）

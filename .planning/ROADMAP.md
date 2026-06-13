@@ -7,11 +7,31 @@
 ## Milestone 总览
 
 - **v1.0** — archived（dry-run PROVEN）
-- **v2.1** — sim 主线 fork（sim-code-ready PASS，见 `sim-build-fork/`）
+- **v2.1** — sim 主线 fork（sim-code-ready PASS，见 `sim-build-fork/`）；审计发现 IsaacLab runtime 未达成 + 真 bug，见下 v2.1.1
+- **v2.1.1（当前）** — Sim Runtime Fix：修 v2.1 留下的 P1-P7（IsaacLab 黑屏 / repo↔desktop 分叉 / 图像 schema / 工程债），见 `2026-06-13-v211-sim-runtime-fix/`
 - **v2.2** — FR3 真机原生 SERL 控制 runtime：Phase 1 ✅ / Phase 2 🟡 5/6 / Phase 6 ⏳
-- **v2.2.1（当前）** — Hybrid Teleop + 完整过程训练：接管原 v2.2 Phase 3–5 范围
+- **v2.2.1（暂停，待 v2.1.1 完成后恢复）** — Hybrid Teleop + 完整过程训练：接管原 v2.2 Phase 3–5 范围
 - **v2.3（候选）** — RLDG：SAC specialist 数据蒸馏进 pi05（zktitan OpenPI/LoRA）；
   备选研究线：ConRFT/π_RL 式直接 VLA 在线 RL
+
+---
+
+## v2.1.1 Sim Runtime Fix（当前）
+
+**Goal**: 让 IsaacLab 插头场景在 fr3-desktop-ts 真能渲染并跑起来，修掉 v2.1 留下的真 bug 与工程债。
+**立项依据**: `2026-06-13-v211-sim-runtime-fix/AUDIT.md`（P1-P7） + `DECISIONS.md` + `REQUIREMENTS.md`。
+**范围外**: phase6-ready 评估（real pkl + precision/recall ≥ 0.85 + 用户签字）仍 DEFERRED。
+**执行**: Opus Max/ultracode（Fable 5 已停用）；fan-out/workflows 按需启用。
+
+| Phase | 内容 | REQ-IDs | Exit 判据 |
+|-------|------|---------|-----------|
+| 1 | Desktop 止血：清 orphan Isaac 进程 + launcher 进程组管理；干净重启采首帧诊断 | IH-01, SR-01/03(诊断) | GPU 无孤儿；GUI 能干净启停；拿到首帧截图 + 启动日志 |
+| 2 | 黑屏根因修复 + repo↔desktop 对齐：Y-up/Z-up、panda_hand prim、DistantLight 方向、USD 路径逐项修；定 canonical 源单向收敛 | SR-01, SR-02, SR-03 | 用户确认的非黑屏截图（见 FR3+桌+插头+插座）；对齐策略落地 |
+| 3 | 图像 schema 一致性：`pixels` ↔ 3 键统一，verify 通过真实生产链产物 + TDD | SD-01 | failure/gello pkl 过 verify_sim_data；测试绿 |
+| 4 | 文档/证据重建：SYNC.md 死引用、"111 passed" 校正 | DOC-01 | sim-build-fork 文档与现实一致，无死引用 |
+| 5 | 分支拆分 + worktree/分支清理 + deferred runtime 收尾 | IH-02, IH-03, SR-04 | 分支边界清晰；worktree/残留分支清理；A8 DR/scene 实例化/A12 ABI 有结论 |
+
+**完成 = v2.1.1 关闭，恢复 v2.2.1 Phase A。**
 
 ---
 
