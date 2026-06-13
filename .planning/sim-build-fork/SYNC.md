@@ -14,7 +14,7 @@
 **触发条件 (per spec section 1.9 + D5b + D11)**:
 - ✅ A1-A10 全部 done (8 个 sim-side 改造 + domain randomization + failure_scenario + verify schema)
 - ✅ A11/A12 schema smoke pass (mock-only, NOT readiness)
-- ✅ 3 follow-up issues from codex `REVIEW-final.md` 全部 resolved (#1 ABI pin, #6/#7 标签语义)
+- ✅ 3 follow-up issues from codex `REVIEW-final.md` [LOST 2026-06-12 reset] 全部 resolved (#1 ABI pin, #6/#7 标签语义); 证据现存于 PROGRESS.md / VERIFY.md
 - ✅ L1 isolation gate: clean (无 sim_remote 硬编码 / panda_joint / /home/robot 残留)
 - ✅ VERIFY.md 出现 `v2.1 sim-code-ready` 显式 label
 - ✅ SYNC.md (本文件) 落地
@@ -68,14 +68,20 @@ sim/scripts/requirements.txt              [#1 fix] numpy<2.0 + scikit-learn==1.3
 
 ### 3.2 计划/Review 文档 (.planning/sim-build-fork/)
 ```
-DESIGN.md                                 spec section 1
-PLAN.md                                   12 plans A1-A12
-PROGRESS.md                               推进日志 + Final Review
-VERIFY.md                                 sim-code-ready 证据 + Final Review
+DESIGN.md                                 [LOST 2026-06-12 reset] 不在磁盘
+PLAN.md                                   [LOST 2026-06-12 reset] 不在磁盘
+PROGRESS.md                               推进日志 + Final Review (存在)
+VERIFY.md                                 sim-code-ready 证据 + Final Review (存在)
 REVIEW-{design,impl-batch1,impl-batch2,reception,final}.md
-plans/PLAN-{A1..A12}.md                   12 plan files
-SYNC.md                                   本文件
+                                          [LOST 2026-06-12 reset] 5 个 review 文档均不在磁盘
+plans/PLAN-A12.md                         (存在) — 唯一幸存的 plan 文件
+plans/PLAN-{A1..A11}.md                   [LOST 2026-06-12 reset] 11 个 plan 文件不在磁盘
+SYNC.md                                   本文件 (存在)
 ```
+
+> **磁盘实况 (2026-06-13 `ls -R` 核对)**: 仅 `PROGRESS.md` / `SYNC.md` / `VERIFY.md` /
+> `plans/PLAN-A12.md` 存在。`DESIGN.md` / `PLAN.md` / 5 个 `REVIEW-*.md` / `plans/PLAN-A1..A11.md`
+> 在 2026-06-12 working-tree reset 中丢失, 不再可引用。下文凡引用这些文件之处均按 LOST 标注。
 
 ### 3.3 Merge 建议
 
@@ -141,7 +147,7 @@ SYNC.md                                   本文件
    - 阻塞: 不阻塞合并, 阻塞 production-ready
 
 7. **Codex #2 / #3 / #4 / #5 follow-up**
-   - 现状: REVIEW-final.md 列了 7 项, #1/#6/#7 已关闭; #2/#3/#4/#5 已在 PROGRESS.md/VERIFY.md 标注
+   - 现状: REVIEW-final.md [LOST 2026-06-12 reset] 曾列 7 项, #1/#6/#7 已关闭; #2/#3/#4/#5 已在 PROGRESS.md/VERIFY.md 标注 (原 review 文档已丢失, 以 PROGRESS.md/VERIFY.md 为准)
    - 需做: 接手 agent 评估是否需要进一步 follow-up
 
 ---
@@ -151,10 +157,42 @@ SYNC.md                                   本文件
 - [x] `sim-code-ready: PASS` 显式标注 (VERIFY.md top + Final Review)
 - [x] `phase6-ready: DEFERRED` 显式标注 (VERIFY.md + PROGRESS.md + SYNC.md)
 - [x] 12 plans A1-A12 全部 done (PROGRESS.md + VERIFY.md)
-- [x] 3 follow-up issues resolved (codex REVIEW-final #1/#6/#7)
+- [x] 3 follow-up issues resolved (codex REVIEW-final #1/#6/#7 — 源 REVIEW-final.md [LOST 2026-06-12 reset], 证据现存 PROGRESS.md/VERIFY.md)
 - [x] L1 isolation gate clean (无 sim_remote / panda_joint / /home/robot 残留)
 - [x] SYNC.md 落地 (本文件)
 - [x] 43 commits 自 v2.0 base (074dd68..HEAD)
-- [x] 文档完整 (DESIGN/PLAN/PROGRESS/VERIFY/REVIEW-* 全部就位)
+- [~] 文档完整性: PROGRESS/VERIFY/SYNC + plans/PLAN-A12.md 在盘; DESIGN/PLAN/REVIEW-*/plans/PLAN-A1..A11 [LOST 2026-06-12 reset] 不在盘
 
 **→ sim fork v2.1 finalize 完成, ready for mainline merge。**
+
+---
+
+## 文档校正 (2026-06-13, v2.1.1 DOC-01)
+
+v2.1 sim-build-fork 文档在 2026-06-12 working-tree reset 后与磁盘实况漂移, 本次 (DOC-01) 校正:
+
+1. **死引用 (dead references) 标注**: `ls -R .planning/sim-build-fork/` 实测仅存
+   `PROGRESS.md` / `SYNC.md` / `VERIFY.md` / `plans/PLAN-A12.md`。以下文件已在
+   2026-06-12 reset 中丢失, 文档原处引用全部就地标注 `[LOST 2026-06-12 reset]`:
+   - `DESIGN.md`, `PLAN.md`
+   - `REVIEW-design.md`, `REVIEW-impl-batch1.md`, `REVIEW-impl-batch2.md`,
+     `REVIEW-reception.md`, `REVIEW-final.md`
+   - `plans/PLAN-A1.md` .. `plans/PLAN-A11.md` (仅 `PLAN-A12.md` 幸存)
+   现已无任何文档声称磁盘上存在不在盘的文件。codex review 结论的实际证据现以
+   PROGRESS.md / VERIFY.md 为准。
+
+2. **测试计数校正**: 旧文档 (PROGRESS.md line 259 / VERIFY.md `python -m pytest sim/ -v`)
+   声称 `111 passed, 2 skipped`。2026-06-13 重跑
+   `cd /Users/tacyvan/Documents/Code/hilserl-fr3 && python3 -m pytest sim/ -q` 实测:
+   **`91 passed, 2 skipped, 4 warnings in 2.89s`**。已把 PROGRESS.md / VERIFY.md 中的
+   `111 passed` 全部改为实测值, 并标注 111 很可能是 fan-out worktree 跨树聚合计数 (非单树真值)。
+
+3. 本节即 SYNC.md 的校正摘要 (per task DOC-01)。
+
+**English summary**: After the 2026-06-12 working-tree reset, the v2.1 docs referenced
+files no longer on disk. Only `PROGRESS.md` / `SYNC.md` / `VERIFY.md` / `plans/PLAN-A12.md`
+survive; `DESIGN.md`, `PLAN.md`, the five `REVIEW-*.md`, and `plans/PLAN-A1..A11.md` are
+marked `[LOST 2026-06-12 reset]` inline. The stale `111 passed, 2 skipped` claim was
+replaced with the re-verified `91 passed, 2 skipped` (`python3 -m pytest sim/ -q`,
+2026-06-13); the 111 figure was likely a cross-worktree aggregate from the fan-out, not a
+single-tree result.

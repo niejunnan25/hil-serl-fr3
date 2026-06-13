@@ -52,14 +52,19 @@ grep -rE "panda_joint|/home/robot|droid\.sim|EnvConfig|franka_env|from scripts|i
 **Full sim/ test suite**:
 ```bash
 python -m pytest sim/ -v
-# 111 passed, 2 skipped, 4 warnings in 3.07s
+# [DOC-01 校正 2026-06-13] 单树实测: 91 passed, 2 skipped, 4 warnings
+#   (`python3 -m pytest sim/ -q` → "91 passed, 2 skipped, 4 warnings in 2.89s")
+# 旧记录 "111 passed, 2 skipped, 4 warnings in 3.07s" 已推翻; 111 很可能是
+# 2026-06-11 fan-out 多 worktree 跨树聚合, 非单树真值。
 ```
 - 2 skipped tests are pre-existing `test_data_imports.py` skips for
   `test_sim_replay_pipeline_importable` and `test_gello_replay_importable` (skipped in
   A1 plan, depend on droid/isaaclab that aren't in the sim-only checkout).
 - 4 warnings: 1 state_25d warning (arith 20 vs wrapper 25 conflict — pre-existing
   per A2 plan), 3 sklearn/scipy deprecation warnings (pre-existing, not regressions).
-- 111 passed is the full L1 cleanup test class (9) + A1-A12 test surface (102) = 111.
+- [DOC-01 校正 2026-06-13] 原句称 "111 passed = L1 cleanup class (9) + A1-A12 surface (102)";
+  单树 `python3 -m pytest sim/ -q` 实测 91 passed (= L1 cleanup class 9 + A1-A12 surface 82)。
+  旧 111 拆解不成立, 很可能源自 fan-out 多 worktree 聚合; 以单树结果 91 为准。
 
 **Out-of-scope L1 hits (deliberately NOT cleaned, documented in PROGRESS.md)**:
 - `sim/data/gello_replay.py`: 5 `/home/robot` hits (conda-activate docstring + 2 dev-box
@@ -134,7 +139,7 @@ explicitly scopes to the 5 files, and pytest 9/9 confirms the scope is satisfied
 **Test 报告**:
 - `python -m pytest sim/data/tests/test_contract_dr.py -v` → 6 passed
 - `python -m pytest sim/scenes/tests/test_domain_randomization.py -v` → 7 passed
-  (6 from PLAN-A8 spec + 1 extra `test_info_dict_has_dr_samples_when_randomize_enabled`)
+  (6 from PLAN-A8 spec [plans/PLAN-A8.md LOST 2026-06-12 reset] + 1 extra `test_info_dict_has_dr_samples_when_randomize_enabled`)
 
 **IsaacLab runtime test**: 本地无 isaaclab 安装, _randomize_* 方法的 **runtime 行为**
 (实际改 light intensity 数值 / camera prim transform / plug root_pos_w) 推迟到 desktop
@@ -351,7 +356,7 @@ schema 正确性; 真实 image rendering / contact sensor 验证留给 mainline 
 - A11/A12 mock smoke 不构成此 readiness
 
 接手 agent 第一步:
-1. 读 DESIGN.md / PROGRESS.md / VERIFY.md
+1. 读 PROGRESS.md / VERIFY.md / SYNC.md (DESIGN.md [LOST 2026-06-12 reset] 不在盘)
 2. 决定: 继续未完成 plan (本 milestone 全部 done) / 申请 `phase6-ready` gate / 合并回主线
 
 ---
@@ -372,7 +377,7 @@ schema 正确性; 真实 image rendering / contact sensor 验证留给 mainline 
   - A11 gen_mock_real_pkl.py + test_domain_alignment.py (smoke-only)
   - A12 test_mixed_training.py (smoke-only, ABI pin numpy<2.0 + sklearn==1.3.0)
 
-- **3 follow-up issues from codex REVIEW-final.md resolved**:
+- **3 follow-up issues from codex REVIEW-final.md [LOST 2026-06-12 reset] resolved** (证据现存本文件 + PROGRESS.md):
   - **#1 (HIGH env, A12)**: numpy 2.x + scikit-learn 1.5.x ABI mismatch →
     sim/scripts/requirements.txt pin numpy<2.0 (1.26.4) + scikit-learn==1.3.0
   - **#6 (MED, A12)**: A12 mock accuracy > 50% 太弱不够 readiness →

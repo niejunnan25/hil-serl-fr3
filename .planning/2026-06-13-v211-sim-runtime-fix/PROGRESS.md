@@ -59,3 +59,35 @@ headless RGB → PNG（绕开上次"纯黑截图"的 X11 窗口抓取陷阱）�
   working tree 中 `hilserl-fr3/scripts/*` `tests/*` 的改动属另一并发会话的 v2.2.1 Phase A C1/C2 review 修复，本里程碑不触碰。
 - 参考脚本（droid，外部项目，未入库）：desktop `/home/robot/droid/scripts/sim/phase3_scene_preview.py`、
   `phase3_simrgb_diagnostic.py`、`droid/sim/assets/{lighting,official_fr3_loader,primitive_scene}.py`。
+
+---
+
+## 2026-06-13（续）— 用户拍板后：全场景 + P3/P4/P5
+
+用户决策：渲染补成完整场景（复用 droid FR3+桌资产）；P3 desktop viewer 为 canonical；P4 producers 产 3 键（sim-to-real）。
+
+### Phase 2 全场景 ✅（SR-01 核心达成）
+- 新写 `plug_fullscene_viewer.py`（workflow mine→author→review；复用 droid `build_fr3_cfg`
+  → FR3 USD `fr3_gripper_collision.usd` 17MB 实在；`build_table_cfg` 程序化黑桌 top z=0；
+  `make_scene_cfg` InteractiveScene 模式 + dome/sun light），叠加插头(0.45,0.12)+插座(0.45,-0.12) 于桌面，
+  FR3 home pose pin 住，headless 抓帧。
+- 渲染：**FR3 + 桌 + 插头 + 插座一图齐全，有阴影、曝光正常（RGB_MEAN=130）**，RC=0 无孤儿。
+  证据 `evidence/desktop-snapshot-20260613/capture_fullscene_01.png`。
+- 遗留（资产质量）：插头/插座仍是粗 STL→USD 白块（无插脚/插孔细节）。后续若要逼真需重做 USD 或补细节
+  （`sim/scenes/plug_scene.py` 已有 `_build_wrist_1_cam_cfg`，可接腕相机出第二真实视角）。
+- **P3 落地**：desktop `plug_scene_viewer.py` / `plug_fullscene_viewer.py` 为 canonical 渲染场景。
+
+### Phase 3 schema 3 键 ✅ (SD-01)
+- `gello_replay.py` 加 `_build_image_dict()`，4 处发射点单 `pixels` → 3 键
+  (side_policy 渲染图 / side_classifier = side_policy 别名 copy / wrist_1 占位)；`validate_output()` 改 3 键校验。
+- `failure_scenario_generator.py` 复用 replay_pure_fk 自动继承 3 键 + `_write_pkl` 内 `_ensure_3key_images` 兜底。
+- 新增 `sim/data/tests/test_image_schema_3key.py`（8 tests，驱动真实 producers 过 `verify_sim_data` image_keys_complete）。
+- 全套回归：**99 passed, 2 skipped**（原 91 + 8 新；零 regression）。contract.py/verify_sim_data.py 无需改（本就 3 键）。
+
+### Phase 4 文档校正 ✅ (DOC-01)
+- sim-build-fork/{SYNC,PROGRESS,VERIFY}.md：所有丢失文档（DESIGN/PLAN/REVIEW-*/PLAN-A1..A11）标注
+  `[LOST 2026-06-12 reset]`；"111 passed" → 实测 "91 passed, 2 skipped"（注：111 疑为 fan-out 跨 worktree 聚合）。
+- SYNC.md 加 DOC-01 校正说明。
+
+### Phase 5 暂缓（不变）
+P6 worktree/分支清理仍因并发 ultracode 会话暂缓。SR-04 deferred runtime 收尾留待。

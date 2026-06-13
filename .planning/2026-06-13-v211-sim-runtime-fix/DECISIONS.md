@@ -21,8 +21,16 @@
 - **里程碑目录**：`.planning/2026-06-13-v211-sim-runtime-fix/`。
 - **phase6-ready 仍 DEFERRED**，不在本里程碑范围。
 
-## 待执行阶段确认的开放问题（plan-phase 时定）
+## 开放问题的解决（2026-06-13 用户拍板，Phase 2 渲染落地后）
 
-- P3 canonical 源：以 repo `sim/scenes/plug_scene.py` 为准回写 desktop，还是以 desktop `plug_insertion_scene.py` 为准回迁 repo？
-- P4 schema 方向：sim-only 阶段把 verify/contract 放宽到单 `pixels`，还是让 producers 产 3 键以匹配真实 SERL pkl？
-- P6 fork 合并债：v2.1 sim 与 v2.2.1 Phase A 是否拆成两条分支，还是接受同分支并在合并时分别处理？
+- **P3 canonical 源 → desktop viewer 为准**。以本里程碑修好的 desktop `plug_scene_viewer.py`
+  为 canonical 可渲染场景；repo `sim/` 继续作数据/契约层，后续按需把 `sim/scenes/plug_scene.py`
+  对齐到 desktop viewer（不反向回写）。
+- **P4 schema → producers 产 3 键**。理由：用户要求 sim 资产尽量贴近真实场景，保证 sim-to-real
+  policy 能把 sim 训的拿到 real 用。因此 gello_replay / failure_scenario_generator 改产
+  3 键（side_policy/wrist_1/side_classifier）匹配真 SERL pkl，verify_sim_data 通过真实生产链产物 + 补 TDD。
+- **渲染完善度 → 补完整场景**。FR3+桌+插头+插座完整场景；**复用之前 FR3-蔬菜抓取 sim 项目（droid）
+  的 FR3 与桌资产**（`droid.sim.assets.official_fr3_loader.build_fr3_cfg` + `primitive_scene` 的桌/标定布景），
+  插头/插座叠加到桌面。
+- **P6 fork 合并债 → 暂缓**。当前有并发 ultracode 会话在同一 working tree 改 v2.2.1 Phase A，
+  删 worktree/分支有风险；P6 留到并发会话结束后再做。

@@ -8,10 +8,10 @@
 ## Current Milestone: v2.1.1 — Sim Runtime Fix
 
 立项日期：2026-06-13（v2.1 sim-build-fork 审计后，见 `2026-06-13-v211-sim-runtime-fix/AUDIT.md`）
-状态：executing（Phase 1 ✅ 止血完成；Phase 2 黑屏 bug 已修，见 `2026-06-13-v211-sim-runtime-fix/PROGRESS.md`）
+状态：executing（Phase 1/2/3/4 ✅；Phase 5 暂缓。见 `2026-06-13-v211-sim-runtime-fix/PROGRESS.md`）
 
 ```
-v2.1.1 progress: Phase 1 ✅ | Phase 2 🟡 (黑屏已修;场景内容+canonical待定) | Phase 3 ⏳ | Phase 4 ⏳ | Phase 5 ⏳ (~1.5/5)
+v2.1.1 progress: Phase 1 ✅ | Phase 2 ✅ (全场景 FR3+桌+插头+插座渲染) | Phase 3 ✅ (schema 3键,99 passed) | Phase 4 ✅ (文档校正) | Phase 5 ⏳暂缓(P6并发) (~4/5)
 v2.2.1 progress: PAUSED — Phase A ✅ CLOSED + A6 gap-closure ✅ 2026-06-13（review 2 critical+7 important 全修，225 passed，见 evidence/phase-a-A6-gate.md）；Phase B 待 motion session（用户现场/E-stop/Xbox），物理前置未就绪
 v2.2 progress:   Phase 1 ✅ CLOSED | Phase 2 🟡 5/6 (P2-T3 待 motion 批准) | Phase 6 ⏳ (sim, 留 v2.2)
 ```
@@ -98,20 +98,19 @@ desktop-side raw 证据: fr3-desktop-ts:/home/robot/.planning/2026-06-13-v221-hy
   IsaacLab runtime 未达成（desktop 黑屏 + repo↔desktop 分叉）+ 真 schema bug（pixels vs 3 键）+ 工程债。
   v2.1.1 设为 current、暂停 v2.2.1、全量 P1-P7（见 2026-06-13-v211-sim-runtime-fix/）。
 
-## Next Step — v2.1.1 Phase 2 收尾 + Phase 3/4
+## Next Step — v2.1.1 收尾（Phase 5 暂缓）
 
-**已完成**：Phase 1 止血（orphan 清掉、GPU 释放、anti-orphan 启动）；Phase 2 黑屏根因
-（场景从未实例化）已修，新 viewer `plug_scene_viewer.py` 能渲染（RGB mean 0→167），
-见 `2026-06-13-v211-sim-runtime-fix/PROGRESS.md` + `evidence/desktop-snapshot-20260613/capture_0{1,2,3}.png`。
+**已完成（Phase 1-4）**：
+- Phase 1 止血：orphan 清掉、GPU 释放、anti-orphan 启动方式。
+- Phase 2：黑屏根因（场景从未实例化）已修；**全场景 viewer `plug_fullscene_viewer.py` 渲染出
+  FR3+桌+插头+插座**（复用 droid FR3/桌资产，RGB mean 130），见 capture_fullscene_01.png。P3=desktop viewer canonical。
+- Phase 3 (SD-01)：producers 产 3 键 schema（sim-to-real），99 passed。
+- Phase 4 (DOC-01)：sim-build-fork 文档死引用 + 计数校正。
 
-**待用户拍板**（DECISIONS.md 开放问题 + 渲染完善度）：
-- P3 canonical 源：repo `sim/scenes/plug_scene.py` 回写 desktop，还是 desktop 脚本回迁 repo？
-- 渲染完善度：当前只证明"能渲染"（plug/socket 为粗 STL→USD 白块、缺 FR3+桌）。是否扩成完整
-  FR3+桌+插头+插座场景（需补/换 FR3 与桌 USD + 修 STL→USD 细节）？
-- P4 schema 方向：放宽 verify 到单 `pixels`，还是 producers 产 3 键（匹配真 SERL）？
-
-**接着**：Phase 3 (SD-01 schema)、Phase 4 (DOC-01 文档校正)。
-**Phase 5 (P6 worktree/分支清理) 暂缓**：当前有并发 ultracode 会话在同一 working tree 工作，删 worktree/分支有风险。
+**剩余**：
+- Phase 5 (P6 worktree/分支清理) **暂缓**：并发 ultracode 会话在用同一 working tree，删 worktree/分支有风险，待其结束。
+- 可选打磨（非阻塞）：插头/插座 USD 仍为粗 STL→USD 白块——若要逼真需重做/补 USD 细节 + 接腕相机第二视角。
+- SR-04 deferred runtime 项（A8 DR / scene 实例化 / A12 ABI）：GUI 已可用，可顺带闭合或给结论。
 
 **v2.1.1 不需要**：真机 motion、Xbox 手柄、E-stop（纯 sim/软件 + desktop GUI）。
 

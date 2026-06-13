@@ -4,7 +4,7 @@
 
 ### Plan 完成
 - 只读盘点完成
-- 写入 `.planning/sim-build-fork/PLAN.md`
+- 写入 `.planning/sim-build-fork/PLAN.md` [LOST 2026-06-12 reset] — 该文件已不在磁盘
 - 范围: sim/ + sim_remote/ + .planning/sim-build-fork/
 
 ### 关键发现
@@ -36,7 +36,8 @@
 - L1 隔离 gate: 已知 FAIL（panda_joint + /home/robot 残留 — A5/A6/A7 任务范围；本 plan 阻塞项不命中）
 - 下一步：A2 (state 8D→25D hard-freeze)
 
-### 偏离 PLAN-A1 的实现细节（README）
+### 偏离 PLAN-A1 的实现细节（README）  <!-- plans/PLAN-A1.md [LOST 2026-06-12 reset] -->
+
 1. **git mv 不可用** — 仓库所有 sim/ 与 sim_remote/ 文件在 ai/20260228-optimize-cge 上是 untracked；改用 `mv + git add` 模拟 git mv 效果（最终 commit 体现为新增，无 rename 检测，这是分支历史决定的，无法补救）。
 2. **测试名规范化** — `test_imports.py` 在 5 个子目录下重名，pytest 收集冲突；改名 `test_{subdir}_imports.py` 以解决 import-mode=prepend 下的 module 重名。
 3. **测试断言需根据实际函数名调整**：
@@ -168,7 +169,7 @@
 - L1 isolation gate: OK
 - **sim-code-ready: PASS** (A1-A10 done + A11/A12 schema smoke pass)
 - **phase6-ready: NOT PASS** (per codex #5/#7: 需要 real pkl + ROADMAP precision/recall ≥ 0.85 + user approval)
-- **codex REVIEW-final #1 (HIGH env)**: numpy 2.2.6 + scikit-learn 1.5.1 ABI mismatch blocks A12 runtime.
+- **codex REVIEW-final #1 (HIGH env)** [源 REVIEW-final.md LOST 2026-06-12 reset]: numpy 2.2.6 + scikit-learn 1.5.1 ABI mismatch blocks A12 runtime.
   Fix deferred to mainline conda env; ABI pin added to sim/scripts/requirements.txt
   (numpy<2.0 → 1.26.4, scikit-learn==1.3.0) so future test runs use a compatible pair.
   Runtime verify deferred to mainline agent's conda env.
@@ -200,7 +201,7 @@
 - **A12 test_mixed_training.py** — mock-only smoke (sklearn LogisticRegression; 25D state, no images)
   - 6 passed; CLI subprocess smoke exit 0
   - 关闭 codex #6 (A12 mock 阈值 > 50% 太弱): 通过条件 = schema/format smoke, NOT accuracy
-- **3 fixes (codex REVIEW-final.md)**:
+- **3 fixes (codex REVIEW-final.md [LOST 2026-06-12 reset]; 证据现存本文件 + VERIFY.md)**:
   - **#1 (HIGH env)**: numpy 2.x + sklearn 1.5.x ABI mismatch → `sim/scripts/requirements.txt` pin
     `numpy<2.0` (1.26.4) + `scikit-learn==1.3.0`; runtime 验证 deferred 到主线 conda env
   - **#6 (MED)**: A11/A12 mock 阈值太弱 → 显式标注 "mock-only, NOT readiness"
@@ -255,8 +256,10 @@
   - The user's 5-file scope is **clean** (per `test_l1_isolation_gate.py` which is the
     authoritative L1 gate harness; pytest 9/9 green)
 - **Test suite final pass**:
-  - `python -m pytest sim/ -v` → **111 passed, 2 skipped, 4 warnings in 3.07s** (was 97 passed
-    + 2 skipped before L1 cleanup; new L1 test class adds 9 tests + existing suite +3)
+  - `python -m pytest sim/ -v` → **91 passed, 2 skipped, 4 warnings** (re-verified 2026-06-13
+    via `python3 -m pytest sim/ -q` → "91 passed, 2 skipped, 4 warnings in 2.89s").
+    [DOC-01 校正 2026-06-13] 原记录 "111 passed, 2 skipped, 4 warnings in 3.07s" 已被推翻;
+    111 很可能是 2026-06-11 fan-out 多 worktree 的跨树聚合计数, 非单树真值。单树现状 = 91 passed.
   - 2 skipped tests are pre-existing `test_data_imports.py::test_sim_replay_pipeline_importable`
     and `test_data_imports.py::test_gello_replay_importable` (skipped because they
     require droid imports that don't exist in the sim-only checkout — pre-existing skip

@@ -14,7 +14,10 @@
   2. fk_converter 做 FK 转换 (关节 → 笛卡尔 delta)
   3. IsaacLab sim 中逐帧回放关节轨迹
   4. 每帧记录 sim observation:
-     - pixels: 相机 RGB (3, 128, 128) uint8 CHW
+     - 3 image keys (P4 sim-to-real): side_policy + wrist_1 + side_classifier,
+       each (3, 128, 128) uint8 CHW. side_classifier 是 side_policy 的 alias
+       (per sim/data/contract.IMAGE_KEY_ALIAS_MAP)。capture_observation 内部
+       渲染单视图 (pixels), 由 _build_image_dict() 拼成 3 键。
      - state:  25D SERL state per STATE_KEYS_ORDERED
        (tcp_pose 7 + tcp_vel 6 + tcp_force 3 + tcp_torque 3 + gripper 6 = 25)
   5. 构建 SERL pkl transitions list
@@ -108,7 +111,11 @@ except ImportError as _e:
 # A4: scale values come from sim/data/contract.py (single source of truth).
 # 旧 0.1 / 0.2 hardcode 是 pre-v2.1 spec 残留；A4 改用 contract.ACTION_SCALE.
 # ===========================================================================
-from sim.data.contract import ACTION_SCALE
+from sim.data.contract import (
+    ACTION_SCALE,
+    IMAGE_KEY_ALIAS_MAP,
+    VALID_PKL_IMAGE_KEYS,
+)
 
 DEFAULT_POS_SCALE     = ACTION_SCALE[0]   # 0.015  (dx, dy, dz)
 DEFAULT_RPY_SCALE     = ACTION_SCALE[3]   # 0.1    (droll, dpitch, dyaw)
@@ -118,6 +125,44 @@ FRANKA_USD = "/home/robot/plug_insertion_sim/assets/panda_arm_hand.usd"
 FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
 
 IMAGE_H, IMAGE_W, IMAGE_C = 128, 128, 3
+
+
+# ===========================================================================
+# P4: 3-key image schema (sim-to-real)
+# ===========================================================================
+# Real SERL pkl carries 3 image keys (side_policy + wrist_1 + side_classifier),
+# each (3,128,128) uint8. sim must emit the SAME 3 keys so a sim-trained policy
+# transfers to real. sim only renders one side view + one wrist view; the
+# classifier view is an alias of side_policy per contract.IMAGE_KEY_ALIAS_MAP.
+def _build_image_dict(
+    side_policy_img: np.ndarray,
+    wrist_1_img: Optional[np.ndarray] = None,
+) -> dict[str, np.ndarray]:
+    """Build the 3-key image dict (side_policy + wrist_1 + side_classifier).
+
+    Args:
+        side_policy_img: rendered/placeholder side view (3,128,128) uint8.
+        wrist_1_img: rendered/placeholder wrist view; if None, a zeros
+            placeholder is used (sim wrist camera not always available).
+
+    Returns:
+        dict {side_policy, wrist_1, side_classifier}. side_classifier is a copy
+        of its alias source (side_policy) per contract.IMAGE_KEY_ALIAS_MAP.
+    """
+    if wrist_1_img is None:
+        wrist_1_img = np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
+    base = {
+        "side_policy": side_policy_img,
+        "wrist_1": wrist_1_img,
+    }
+    # alias keys (side_classifier -> side_policy): copy the source array.
+    images: dict[str, np.ndarray] = {}
+    for k in VALID_PKL_IMAGE_KEYS:
+        if k in IMAGE_KEY_ALIAS_MAP:
+            images[k] = base[IMAGE_KEY_ALIAS_MAP[k]].copy()
+        else:
+            images[k] = base[k]
+    return images
 
 
 # ===========================================================================
@@ -463,14 +508,18 @@ def replay_in_sim(
             prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
         )
 
+        # P4: emit 3 image keys (side_policy + wrist_1 + side_classifier).
+        # sim renders a single side view (obs["pixels"]) -> side_policy;
+        # side_classifier aliases side_policy; wrist_1 placeholder until a
+        # dedicated wrist camera is wired in build_scene().
         transition = {
             "observations": {
                 "state": obs["state"].copy(),
-                "pixels": obs["pixels"].copy(),
+                **_build_image_dict(obs["pixels"].copy()),
             },
             "next_observations": {
                 "state": next_obs["state"].copy(),
-                "pixels": next_obs["pixels"].copy(),
+                **_build_image_dict(next_obs["pixels"].copy()),
             },
             "actions": action.copy(),
             "rewards": np.float32(0.0),  # reward 由 plug_reward_labeler.py 后处理
@@ -620,14 +669,17 @@ def replay_pure_fk(
             continue
 
         done = (i == N - 1)
+        # P4: emit 3 image keys (side_policy + wrist_1 + side_classifier).
+        # pure-FK mode has no rendered image; all 3 keys are zeros placeholders
+        # with side_classifier aliasing side_policy per contract.
         transition = {
             "observations": {
                 "state": obs["state"].copy(),
-                "pixels": pixels_placeholder.copy(),
+                **_build_image_dict(pixels_placeholder.copy()),
             },
             "next_observations": {
                 "state": next_obs["state"].copy(),
-                "pixels": pixels_placeholder.copy(),
+                **_build_image_dict(pixels_placeholder.copy()),
             },
             "actions": action.copy(),
             "rewards": np.float32(0.0),
@@ -680,20 +732,28 @@ def validate_output(pkl_path: str) -> bool:
 
     # 检查 shape/dtype
     state_dim = t0["observations"]["state"].shape
-    pixels_shape = t0["observations"]["pixels"].shape
     action_dim = t0["actions"].shape
 
-    print(f"[CHECK] state: {state_dim}, pixels: {pixels_shape}, actions: {action_dim}")
+    # P4: 3-key image schema (side_policy + wrist_1 + side_classifier)
+    obs_image_keys = set(t0["observations"].keys()) - {"state"}
+    print(f"[CHECK] state: {state_dim}, image_keys: {sorted(obs_image_keys)}, "
+          f"actions: {action_dim}")
     print(f"[CHECK] state dtype: {t0['observations']['state'].dtype}")
-    print(f"[CHECK] pixels dtype: {t0['observations']['pixels'].dtype}")
+
+    if obs_image_keys != set(VALID_PKL_IMAGE_KEYS):
+        print(f"[FAIL] image keys {sorted(obs_image_keys)} != {sorted(VALID_PKL_IMAGE_KEYS)}")
+        ok = False
+    for k in VALID_PKL_IMAGE_KEYS:
+        img = t0["observations"][k]
+        print(f"[CHECK] {k}: shape {img.shape}, dtype {img.dtype}")
+        if img.shape != (IMAGE_C, IMAGE_H, IMAGE_W):
+            print(f"[FAIL] {k} shape {img.shape} != ({IMAGE_C},{IMAGE_H},{IMAGE_W})")
+            ok = False
 
     # A2: state dim must match sim/data/contract.STATE_DIMS (25D)
     from sim.data.contract import STATE_DIMS
     if state_dim != (STATE_DIMS,):
         print(f"[FAIL] state shape {state_dim} != ({STATE_DIMS},)")
-        ok = False
-    if pixels_shape != (IMAGE_C, IMAGE_H, IMAGE_W):
-        print(f"[FAIL] pixels shape {pixels_shape} != ({IMAGE_C},{IMAGE_H},{IMAGE_W})")
         ok = False
     if action_dim != (7,):
         print(f"[FAIL] action shape {action_dim} != (7,)")

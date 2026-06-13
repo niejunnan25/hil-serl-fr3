@@ -30,12 +30,39 @@ from sim.data.contract import (
     FAILURE_REWARD,
     IMAGE_SHAPE,
     STATE_DIMS,
+    VALID_PKL_IMAGE_KEYS,
 )
-from sim.data.gello_replay import replay_pure_fk
+from sim.data.gello_replay import _build_image_dict, replay_pure_fk
 
 
-# 图像 placeholder (failure 阶段不需要真实图像; 用 zeros 占位 schema)
-_PIXELS_PLACEHOLDER = np.zeros((IMAGE_SHAPE[0], IMAGE_SHAPE[1], IMAGE_SHAPE[2]), dtype=np.uint8)
+# P4: 3-key image schema (sim-to-real).
+# failure transitions reuse replay_pure_fk(), which already emits the 3 contract
+# image keys (side_policy + wrist_1 + side_classifier, side_classifier aliasing
+# side_policy per contract.IMAGE_KEY_ALIAS_MAP). _ensure_3key_images() is a
+# defensive backfill: if any obs is missing the 3-key schema (e.g. an upstream
+# change), it rebuilds the 3 keys from a zeros placeholder so the written pkl
+# always passes verify_sim_data.verify_image_keys_complete.
+_PIXELS_PLACEHOLDER = np.zeros(
+    (IMAGE_SHAPE[0], IMAGE_SHAPE[1], IMAGE_SHAPE[2]), dtype=np.uint8
+)
+
+
+def _ensure_3key_images(transitions: list) -> None:
+    """In-place: guarantee every obs/next_obs carries the 3 contract image keys."""
+    want = set(VALID_PKL_IMAGE_KEYS)
+    for t in transitions:
+        for obs_key in ("observations", "next_observations"):
+            obs = t.get(obs_key)
+            if obs is None:
+                continue
+            if set(obs.keys()) - {"state"} != want:
+                # backfill from existing side_policy if present, else placeholder
+                source = obs.get("side_policy", _PIXELS_PLACEHOLDER.copy())
+                wrist = obs.get("wrist_1")
+                for k in list(obs.keys()):
+                    if k != "state":
+                        del obs[k]
+                obs.update(_build_image_dict(source, wrist))
 
 
 class FailureScenarioGenerator:
@@ -51,6 +78,9 @@ class FailureScenarioGenerator:
         self._output_dir = output_dir
 
     def _write_pkl(self, transitions: list, output_path: Optional[str]) -> Optional[str]:
+        # P4: guarantee 3-key image schema before persisting (and on the
+        # returned in-memory transitions, since this runs before write).
+        _ensure_3key_images(transitions)
         if output_path is None:
             return None
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
