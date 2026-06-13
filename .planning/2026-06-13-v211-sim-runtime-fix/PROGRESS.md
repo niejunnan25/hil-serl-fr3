@@ -128,3 +128,20 @@ Chinese 站(爱给网)许可不清 → **MAKE**。
 - viewer 改为 spawn 这两个 USD（替代 viewer 内 primitive）。渲染 `capture_usdasset_03.png`：
   六个凹陷五孔孔位 + 红开关 + 三脚插头 + FR3 + 桌，清晰可辨（RGB mean 92.5）。
 - 五孔单孔细节在远景偏小，可出 close-up 复核（待定）。
+
+---
+
+## 2026-06-13（续4）— 更逼真 + 接入真训练场景
+
+用户：(1)「欧/英标小改成国标」可行但不划算（插孔必须重做=工作量相当，且下载有 token/外网摩擦）→ 选自建升级；
+(2) 要更逼真 + **接入真正的 sim 训练场景**。
+
+- **Stage 1 更逼真**：`generate_gn109k_usd.py` 材质改光泽白塑料 / 暗光泽插孔 / 金属插脚；
+  三极 L/N 改**八字**斜插（`add_box rot_deg`）；修 z 叠放 bug（灰底盖住插孔→抬高 slot）。
+  close-up 渲染 `capture_gn109k_closeup2.png`：每孔 GB 五孔（三极品字八字 + 两极）清晰可见。
+- **Stage 2 接入真训练场景**：USD 入库 `sim/assets/cn_gn109k_{strip,plug}.usd`；
+  `sim/scenes/plug_scene.py`（canonical InteractiveScene）的 `_build_socket_cfg`/`_build_plug_cfg`
+  从占位 CylinderCfg → **UsdFileCfg 引用 GN-109K strip / 三脚 plug**（repo 相对路径，L1 干净）。
+  `pytest sim/` 仍 99 passed/2 skipped；L1 gate 干净（无 /home/robot）。
+- 待办：desktop 实跑 `plug_scene.py` 全场景验证（依赖 repo `assets/fr3.usd` 是否在 desktop 就位；
+  否则用已验证的 `plug_fullscene_viewer.py`=droid FR3 + GN-109K USD 作 desktop 工作场景）。

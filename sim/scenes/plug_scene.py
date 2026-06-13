@@ -77,6 +77,10 @@ except ImportError:
 # ===========================================================================
 FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
 FR3_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "fr3.usd")
+# BULL GN-109K 6x五孔 power strip + its own 三脚 tail-cord plug (authored by
+# .planning/.../generate_gn109k_usd.py; repo-relative so the L1 gate stays clean).
+STRIP_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "cn_gn109k_strip.usd")
+PLUG_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "cn_gn109k_plug.usd")
 
 TABLE_HEIGHT = 0.74              # metres
 TABLE_SIZE = (1.2, 0.8, 0.04)   # (x, y, z) metres
@@ -90,8 +94,10 @@ SOCKET_RADIUS = 0.018
 SOCKET_DEPTH = 0.04
 SOCKET_COLOR = (0.8, 0.8, 0.8)  # light grey
 
-PLUG_POSITION = (-0.15, 0.0, TABLE_HEIGHT + PLUG_HEIGHT / 2.0)
-SOCKET_POSITION = (0.15, 0.0, TABLE_HEIGHT + 0.01)
+# USD assets are authored Z-up with their base at z=0, so they rest on the table
+# when placed at z=TABLE_HEIGHT. Strip = fixed insertion target; plug = graspable.
+PLUG_POSITION = (-0.05, 0.12, TABLE_HEIGHT)     # 三脚 plug on the table, in reach
+SOCKET_POSITION = (0.12, 0.0, TABLE_HEIGHT)     # GN-109K strip fixed on the table
 
 
 # ===========================================================================
@@ -158,19 +164,21 @@ def _build_table_cfg(prim_path: str = "{ENV_REGEX_NS}/Table") -> RigidObjectCfg:
 
 
 def _build_plug_cfg(prim_path: str = "{ENV_REGEX_NS}/Plug") -> RigidObjectCfg:
-    """Rigid body plug cylinder."""
+    """The strip's own 三脚 (3-pin) tail-cord plug — the graspable object the FR3
+    re-inserts into a 五孔 outlet (de-energized self-loop = safe for real RL).
+
+    Replaces the old placeholder cylinder with the authored GN-109K plug USD.
+    """
     return RigidObjectCfg(
         prim_path=prim_path,
-        spawn=sim_utils.CylinderCfg(
-            radius=PLUG_RADIUS,
-            height=PLUG_HEIGHT,
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=PLUG_USD_PATH,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=False,
                 disable_gravity=False,
             ),
             collision_props=sim_utils.CollisionPropertiesCfg(),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=PLUG_COLOR),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.045),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=PLUG_POSITION,
@@ -179,15 +187,17 @@ def _build_plug_cfg(prim_path: str = "{ENV_REGEX_NS}/Plug") -> RigidObjectCfg:
 
 
 def _build_socket_cfg(prim_path: str = "{ENV_REGEX_NS}/Socket") -> RigidObjectCfg:
-    """Static socket target."""
+    """The BULL GN-109K 6x五孔 power strip — fixed (kinematic) on the table; the
+    insertion target whose own outlets the tail-cord plug goes into.
+
+    Replaces the old placeholder cylinder with the authored GN-109K strip USD.
+    """
     return RigidObjectCfg(
         prim_path=prim_path,
-        spawn=sim_utils.CylinderCfg(
-            radius=SOCKET_RADIUS,
-            height=SOCKET_DEPTH,
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=STRIP_USD_PATH,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=SOCKET_COLOR),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=SOCKET_POSITION,
