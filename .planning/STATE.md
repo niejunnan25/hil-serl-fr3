@@ -12,7 +12,7 @@
 
 ```
 v2.1.1 progress: Phase 1 ✅ | Phase 2 ✅ (全场景 FR3+桌+插头+插座渲染) | Phase 3 ✅ (schema 3键,99 passed) | Phase 4 ✅ (文档校正) | Phase 5 ⏳暂缓(P6并发) (~4/5)
-v2.2.1 progress (real 线, 本会话推进): Phase A ✅ CLOSED + A6 ✅；Phase B 已规划(PLAN-B1..B4 + B-RESEARCH 契约 grounding) + B1a(/pose 绝对位姿跟随软件) ✅ 实现验证(232 passed, opus 对抗 APPROVE)；B1b/B2b/B3/B4 待真机 motion session（用户现场/E-stop/Xbox），物理前置未就绪
+v2.2.1 progress (real 线): → 权威状态已拆分到 2026-06-13-v221-hybrid-teleop/STATE.md（本顶层文件不再维护 v2.2.1 实时状态）。摘要：Phase A+A6 ✅ / Phase B 已规划 + B1a,B2a 软件 ✅ / B1b 起待真机。
 v2.2 progress:   Phase 1 ✅ CLOSED | Phase 2 🟡 5/6 (P2-T3 待 motion 批准) | Phase 6 ⏳ (sim, 留 v2.2)
 ```
 
@@ -116,9 +116,7 @@ desktop-side raw 证据: fr3-desktop-ts:/home/robot/.planning/2026-06-13-v221-hy
 
 ---
 
-### （暂停）v2.2.1 Phase B 恢复条件 — 待 v2.1.1 完成
-B1 (GELLO e2e P2-T3) → B2 (Xbox e2e) → B3 (切换 e2e) → B4 (实标)。前置：
-- [ ] Xbox 手柄 USB 接入 fr3-desktop-ts
-- [ ] 用户现场 + E-stop 就位
-- [ ] 显式 approval 环境变量
-- [ ] 一次联合 motion session
+### v2.2.1 内容已拆出
+v2.2.1（含 Phase B 恢复条件、决策、blocker、真机门控）见
+`2026-06-13-v221-hybrid-teleop/STATE.md`。本顶层 STATE 仅维护 v2.1.1（sim）+ v2.2 历史 + 跨 milestone 索引。
+建议 v2.1.1 同样把实时状态收到 `2026-06-13-v211-sim-runtime-fix/STATE.md`，彻底消除并发覆盖。
