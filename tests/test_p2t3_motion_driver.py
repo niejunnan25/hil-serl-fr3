@@ -12,13 +12,16 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,15 +29,69 @@ SCRIPTS = ROOT / "scripts"
 SETUP = SCRIPTS / "setup"
 DRIVER = SCRIPTS / "p2_t3_e2e_motion_driver.py"
 
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from fk_converter import forward_kinematics  # noqa: E402
+from gello_pose_follow import FR3_DEFAULT_JOINTS  # noqa: E402
+
 PYTHON_BIN = sys.executable
 
 ENV_BASE = os.environ.copy()
+APPROVAL = "I_APPROVE_P2T3_FULL_E2E_MOTION"
 
 
 def _run(cmd, **kw):
     return subprocess.run(
         cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw
     )
+
+
+@contextmanager
+def mock_franka_server(q0, pose):
+    """A tiny in-process franka_server stub. POST /getstate -> {q, pose};
+    POST /clearerr -> {}; POST /pose -> records body['arr']. Yields a dict with
+    the bound url and the list of received /pose payloads."""
+    posted = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):  # silence
+            pass
+
+        def _read_json(self):
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(n) if n else b"{}"
+            try:
+                return json.loads(raw or b"{}")
+            except Exception:
+                return {}
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            route = self.path.rstrip("/")
+            body = self._read_json()
+            if route.endswith("/getstate"):
+                self._send({"q": list(map(float, q0)), "pose": list(map(float, pose))})
+            elif route.endswith("/pose"):
+                posted.append(body)
+                self._send({})
+            else:  # /clearerr, /startimp, etc.
+                self._send({})
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield {"url": f"http://127.0.0.1:{srv.server_address[1]}/", "posted": posted}
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 # ---------------------------------------------------------------------------
@@ -92,37 +149,65 @@ class TestMotionDriver:
         assert r.returncode == 5
         assert "approval required" in r.stderr
 
-    def test_full_mode_fails_closed_pending_phaseB(self, tmp_path):
-        # C2 (REVIEW-PhaseA): full mode must FAIL CLOSED. The agent emits a
-        # normalized [-1,1] delta action, but /pose expects an ABSOLUTE pose;
-        # POSTing the delta-as-pose would command an uncontrolled motion. The
-        # correct GELLO-leader -> FR3-follower pose reconstruction is Phase B
-        # work, so until then full mode must NOT POST anything: it returns
-        # rc 10 with a clear "disabled / pending Phase B" log and zero /pose.
+    def test_full_mode_streams_absolute_pose_against_mock_server(self, tmp_path):
+        # B1a: full mode drives the PROVEN contract — read q0/currpos from
+        # /getstate, FK-bias gate, then per tick POST /pose {"arr":[abs pose]}.
+        # Mock server returns a pose == FK(q0) so the bias gate passes.
         log = tmp_path / "full.log"
-        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": "I_APPROVE_P2T3_FULL_E2E_MOTION"}
-        r = _run(
-            [
-                PYTHON_BIN, str(DRIVER),
-                "--mode", "full",
-                "--server", "http://127.0.0.1:1/",  # must never be contacted
-                "--hz", "20",
-                "--duration", "0.3",
-                "--log", str(log),
-            ],
-            env=env,
-            timeout=15,
-        )
-        # rc 10 is the fail-closed path, which returns BEFORE any network
-        # call. (Had it attempted the POST, the bogus :1 server would have
-        # produced rc 9 instead — so rc==10 itself proves no /pose was sent.)
-        assert r.returncode == 10, (r.returncode, r.stdout, r.stderr)
-        text = log.read_text()
-        assert "DISABLED" in text
-        assert "pending Phase B" in text
-        assert "no /pose issued" in text
-        # Never reached the per-tick streaming loop / a server rejection.
-        assert "server rejected" not in text
+        q0 = FR3_DEFAULT_JOINTS.copy()
+        pose = forward_kinematics(q0)  # bias == 0 -> gate passes
+        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": APPROVAL}
+        with mock_franka_server(q0, pose) as srv:
+            r = _run(
+                [
+                    PYTHON_BIN, str(DRIVER),
+                    "--mode", "full",
+                    "--server", srv["url"],
+                    "--hz", "20",
+                    "--duration", "0.2",
+                    "--log", str(log),
+                ],
+                env=env,
+                timeout=20,
+            )
+            posted = srv["posted"]
+        assert r.returncode == 0, (r.returncode, r.stdout, r.stderr, log.read_text())
+        assert len(posted) >= 1, "full mode must POST at least one /pose"
+        for body in posted:
+            assert "arr" in body, f"payload key must be 'arr', got {list(body)}"
+            arr = body["arr"]
+            assert len(arr) == 7
+            assert np.linalg.norm(arr[3:]) == pytest.approx(1.0, abs=1e-3)
+        # First commanded pose ~= current pose (no startup jump).
+        first = np.array(posted[0]["arr"])
+        np.testing.assert_allclose(first[:3], pose[:3], atol=2e-3)
+
+    def test_full_mode_fk_bias_gate_refuses_on_frame_mismatch(self, tmp_path):
+        # If FK(q0) disagrees with the server's reported current pose by more
+        # than the bias limit, full mode must REFUSE (rc 11) and POST nothing —
+        # so a bad FK/flange frame never commands a startup jump.
+        log = tmp_path / "full.log"
+        q0 = FR3_DEFAULT_JOINTS.copy()
+        pose = forward_kinematics(q0).copy()
+        pose[0] += 0.10  # 10 cm mismatch >> 5 mm bias limit
+        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": APPROVAL}
+        with mock_franka_server(q0, pose) as srv:
+            r = _run(
+                [
+                    PYTHON_BIN, str(DRIVER),
+                    "--mode", "full",
+                    "--server", srv["url"],
+                    "--hz", "20",
+                    "--duration", "0.2",
+                    "--log", str(log),
+                ],
+                env=env,
+                timeout=20,
+            )
+            posted = srv["posted"]
+        assert r.returncode == 11, (r.returncode, r.stdout, r.stderr, log.read_text())
+        assert len(posted) == 0, "bias gate must POST no /pose"
+        assert "mismatch" in log.read_text().lower()
 
 
 # ---------------------------------------------------------------------------

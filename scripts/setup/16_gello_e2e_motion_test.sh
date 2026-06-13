@@ -30,14 +30,15 @@
 #         Does NOT call /pose or any motion endpoint.
 #         Exit 0 on success.
 #
-#   4. motion (FULL E2E — APPROVED, currently FAIL-CLOSED)
-#         GELLO read -> FK -> Cartesian delta -> normalize -> (would) POST /pose.
-#         Invokes the driver with --mode full. The driver currently
-#         FAILS CLOSED (rc 10, no /pose issued): the normalized delta ->
-#         absolute /pose conversion is pending Phase B server-contract
-#         verification (REVIEW-PhaseA C2). Until then this mode exits 32
-#         without sending any motion command.
-#         Requires FR3_GELLO_E2E_APPROVAL set to the approval phrase.
+#   4. motion (FULL E2E — APPROVED)
+#         GELLO joint-follow -> forward_kinematics -> POST absolute /pose
+#         {"arr":[x,y,z,qx,qy,qz,qw]} (the proven record_gello_demos_serl
+#         contract; B1a). Invokes the driver with --mode full. The driver
+#         reads q0+currpos from /getstate, applies the FK-bias gate (rc 11
+#         if FK frame mismatches), then streams. Gated by FR3_GELLO_E2E_APPROVAL.
+#         FIRST live run must follow the on-site ramp: dry-run -> no-op
+#         (command current pose) -> micro -> full, operator + E-stop present.
+#         Streams at $HZ (default 10) for $DURATION seconds.
 #         Logs to artifacts/logs/p2-t3-e2e-motion-<ts>.log.
 #
 # Approval phrase:  FR3_GELLO_E2E_APPROVAL=I_APPROVE_P2T3_FULL_E2E_MOTION
@@ -273,10 +274,10 @@ motion() {
     require_approval "motion"
 
     echo "=============================================="
-    echo " P2-T3 e2e motion — FULL STREAM (FAIL-CLOSED)"
-    echo "  GELLO -> FK -> delta -> normalize -> (would) POST /pose"
-    echo "  NOTE: driver --mode full is fail-closed pending Phase B"
-    echo "        (REVIEW-PhaseA C2); no /pose will be issued (exit 32)."
+    echo " P2-T3 e2e motion — FULL STREAM"
+    echo "  GELLO joint-follow -> FK -> POST absolute /pose {\"arr\"}"
+    echo "  (proven record_gello_demos_serl contract; B1a)"
+    echo "  FIRST live run: ramp dry-run -> no-op -> micro -> full, E-stop ready."
     echo "  ROBOT=${ROBOT_IP}  SERVER=${FRANKA_SERVER_URL}"
     echo "  HZ=${HZ}  DURATION=${DURATION}s"
     echo "=============================================="
@@ -335,12 +336,12 @@ motion() {
             err "franka_server rejected a /pose command (see ${log_file})."
             exit 9
             ;;
-        10)
-            err "FULL E2E disabled: GELLO->follower /pose conversion pending"
-            err "Phase B server-contract verification (REVIEW-PhaseA C2);"
-            err "no /pose issued. Implement + verify the pose reconstruction"
-            err "in Phase B (B1) before this mode can stream. See ${log_file}."
-            exit 32
+        11)
+            err "FK/EE-frame mismatch: forward_kinematics(q0) disagrees with the"
+            err "server's reported current pose beyond the bias limit; refused to"
+            err "command a startup jump. Calibrate FK/flange before live motion"
+            err "(B-RESEARCH live-verify). No /pose issued. See ${log_file}."
+            exit 33
             ;;
         *)
             err "Motion stream exited with unexpected rc=${rc} (see ${log_file})."

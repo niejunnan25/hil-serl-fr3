@@ -5,15 +5,17 @@ Phase A only exercises the driver in --dry-run and --micro modes;
 --full is gated by the shell's approval env var and never invoked
 without an operator in the loop with the E-stop.
 
-The driver is intentionally minimal: it opens GELLO, reads joints at
-HZ, and feeds them through GelloCartesianDeltaAgent. dry-run / micro
-exercise the FK + safety pipeline without touching the robot.
+dry-run / micro exercise the GelloCartesianDeltaAgent FK + safety
+pipeline without touching the robot (no POST).
 
---full FAILS CLOSED (returns rc 10, no /pose) pending Phase B: the
-agent emits a normalized [-1,1] delta but /pose expects an absolute
-pose, so the GELLO-leader -> FR3-follower pose reconstruction must be
-implemented and verified against the live server contract in Phase B
-(B1) before any motion is streamed. See REVIEW-PhaseA C2.
+--full (B1a) drives the PROVEN record_gello_demos_serl contract:
+read q0+currpos from /getstate, gate on the FK-vs-currpos bias, then
+GELLO joint-follow -> forward_kinematics -> POST absolute /pose
+{"arr":[x,y,z,qx,qy,qz,qw]} (franka_server's only motion command).
+It is gated behind FR3_GELLO_E2E_APPROVAL; the FIRST live run must
+still follow the on-site dry-run -> no-op(current pose) -> micro ->
+full ramp with operator + E-stop (Phase B B1b live-verify). See
+B-RESEARCH.md for the grounded contract.
 """
 
 from __future__ import annotations
@@ -158,31 +160,99 @@ def _send_micro(agent: GelloCartesianDeltaAgent, driver, hz: float, log_fp) -> i
     return 0
 
 
+# FK-bias gate (B1a): if forward_kinematics(q0) disagrees with the server's
+# reported current pose by more than this, the in-repo DH FK does not match the
+# server's O_T_EE/flange frame, so the first FK'd absolute /pose would command a
+# startup jump. Refuse rather than command it (verify/calibrate live in Phase B).
+FK_BIAS_LIMIT = 0.005  # meters
+
+
+def _post(url: str, route: str, body: dict, timeout: float = 5.0):
+    import requests
+    r = requests.post(url.rstrip("/") + route, json=body, timeout=timeout)
+    r.raise_for_status()
+    try:
+        return r.json()
+    except Exception:
+        return {}
+
+
 def _send_full(
     agent: GelloCartesianDeltaAgent, driver, hz: float, duration: float,
     server_url: str, log_fp,
 ) -> int:
-    """Mode: --full. FAIL CLOSED — never POST (REVIEW-PhaseA C2).
+    """Mode: --full. GELLO joint-follow -> FK -> absolute POST /pose, the PROVEN
+    record_gello_demos_serl contract (B-RESEARCH.md). Approval already verified
+    by the caller. franka_server's only motion command is absolute /pose
+    {"arr":[x,y,z,qx,qy,qz,qw]}; there is no joint command route.
 
-    The agent emits a NORMALIZED 7D delta action [dx,dy,dz,droll,dpitch,
-    dyaw,gripper] in [-1,1], but franka_server's /pose endpoint expects an
-    ABSOLUTE pose [x,y,z,qx,qy,qz,qw]. POSTing the normalized delta as an
-    absolute pose would drive the EE toward the origin with a non-unit
-    quaternion — a large, uncontrolled real-robot motion.
-
-    The correct GELLO-leader -> FR3-follower absolute-pose reconstruction
-    (read the follower's current pose, apply the raw Cartesian delta,
-    compose a valid unit-quaternion target) must be implemented and
-    verified against the LIVE /pose contract in Phase B (B1), with the
-    robot + operator + E-stop in the loop. Until then full mode refuses
-    to issue any motion command.
+    Safety ramp:
+      1. read q0 + currpos from POST /getstate
+      2. FK-bias gate: ||FK(q0)[:3] - currpos[:3]|| <= FK_BIAS_LIMIT else refuse (rc 11)
+      3. per tick: POST /clearerr, then POST /pose {"arr": FK(joint_target)}
     """
+    from gello_pose_follow import GelloPoseFollower
+    from fk_converter import forward_kinematics
+
+    # 1. Read current robot state to anchor the follow + gate the FK frame.
+    try:
+        state = _post(server_url, "/getstate", {})
+        q0 = np.asarray(state["q"], dtype=np.float64).flatten()[:7]
+        currpos = np.asarray(state["pose"], dtype=np.float64).flatten()[:7]
+    except Exception as e:
+        log_fp.write(f"[FULL] /getstate failed: {e}\n")
+        log_fp.flush()
+        return 6
+
+    # 2. FK-bias gate — never command a startup jump from a mismatched FK frame.
+    fk_q0 = forward_kinematics(q0)
+    bias = float(np.linalg.norm(fk_q0[:3] - currpos[:3]))
+    if bias > FK_BIAS_LIMIT:
+        log_fp.write(
+            f"[FULL] REFUSED: FK/EE-frame mismatch: ||FK(q0)-currpos||="
+            f"{bias:.4f}m > {FK_BIAS_LIMIT}m. Calibrate FK/flange before live "
+            f"motion (B-RESEARCH live-verify). No /pose issued.\n"
+        )
+        log_fp.flush()
+        return 11
+
+    raw_gello0 = np.asarray(driver.get_joints(), dtype=np.float64).flatten()[:7]
+    # NOTE (unit hygiene): GelloPoseFollower's max_step / max_total_delta are
+    # JOINT-RADIAN gates (faithful to record_gello_demos_serl). They are a
+    # DIFFERENT unit system from the driver-level MAX_STEP / MAX_TOTAL_DELTA
+    # below, which are Cartesian METERS caps consumed by GelloCartesianDeltaAgent
+    # in dry-run/micro. Do NOT pass the meters constants here — use the
+    # follower's own radian defaults so the two systems are never conflated.
+    follower = GelloPoseFollower(q0=q0, raw_gello0=raw_gello0)
     log_fp.write(
-        "[FULL] DISABLED: GELLO->follower absolute /pose conversion pending "
-        "Phase B server-contract verification (REVIEW-PhaseA C2); no /pose issued\n"
+        f"[FULL] start follow: bias={bias:.5f}m q0={np.round(q0,3).tolist()}\n"
     )
+
+    dt = 1.0 / hz
+    end = time.monotonic() + duration
+    tick = 0
+    while time.monotonic() < end:
+        raw = driver.get_joints()
+        target, abs_pose, ok, info = follower.step(raw)
+        log_fp.write(
+            f"[FULL] t={tick} step={info['step_delta']:.6f} "
+            f"total={info['total_delta']:.6f} safe={ok}\n"
+        )
+        if not ok:
+            log_fp.write(f"[FULL] safety violation: {info['violation']}\n")
+            log_fp.flush()
+            return 8
+        try:
+            _post(server_url, "/clearerr", {})
+            _post(server_url, "/pose", {"arr": [float(x) for x in abs_pose]})
+        except Exception as e:
+            log_fp.write(f"[FULL] server rejected /pose: {e}\n")
+            log_fp.flush()
+            return 9
+        tick += 1
+        time.sleep(dt)
     log_fp.flush()
-    return 10
+    return 0
 
 
 def main() -> int:
