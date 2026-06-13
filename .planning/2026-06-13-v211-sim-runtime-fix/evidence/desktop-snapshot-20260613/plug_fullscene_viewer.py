@@ -83,32 +83,87 @@ DEFAULT_PLUG_USD = "/home/robot/plug_insertion_sim/sim-scene/cn_two_pin_plug.usd
 DEFAULT_SOCKET_USD = "/home/robot/plug_insertion_sim/sim-scene/cn_three_pin_socket.usd"
 DEFAULT_OUT_PNG = "/home/robot/plug_insertion_sim/sim-scene/_fullscene_capture.png"
 
-# Camera framing for the full workspace (table center ~x=0.45, FR3 at origin,
-# plug/socket cluster at x=0.45 y=+/-0.12). Eye/target chosen to keep the FR3,
-# the table top (z=0), and the props all in frame.
-CAM_EYE = (1.45, 0.95, 0.85)
-CAM_TARGET = (0.45, 0.0, 0.06)
+# Camera framing: FR3 at origin; the 270mm BULL strip lies along world X,
+# centered at x=0.45 on the table top (z=0); the 2-pin plug sits in front of it.
+# Elevated 3/4 view so the 6 outlets on the strip's top face are visible.
+CAM_EYE = (0.74, 0.42, 0.52)
+CAM_TARGET = (0.45, 0.0, 0.03)
 
-# Plug/socket world poses (Z-up). Table top surface is at world z=0.0 (droid
-# TABLE_TOP_Z). PATCH: per the USD README the meshes are Y-up and the +90deg
-# about-X rotation makes the LARGER authored dimension vertical, so the resting
-# height is NOT the 18/25 mm "depth" assumed earlier. Raise both parts so their
-# authored center sits clearly above the table; the exact face-down pose is
-# tuned on the first headless RGB (see flip note on the quats below).
-PLUG_TRANSLATION = (0.45, 0.12, 0.03)
-SOCKET_TRANSLATION = (0.45, -0.12, 0.05)
+# 2-pin plug (still cn_two_pin_plug USD): in front of the strip, resting on table.
+# -90 deg about X (authored Y-up): pins point UP so they are visible.
+PLUG_TRANSLATION = (0.45, 0.15, 0.03)
+PLUG_ORIENT = (0.70710678, -0.70710678, 0.0, 0.0)
 
-# +90 deg about X maps the USD's authored Y-up onto the stage Z-up. VERIFY the
-# sign + resting z on the first headless RGB; flip to (0.7071, -0.7071, 0, 0)
-# if a part renders on its side, and adjust z so its lowest face sits at z=0.0.
-PLUG_ORIENT = (0.70710678, 0.70710678, 0.0, 0.0)
-SOCKET_ORIENT = (0.70710678, 0.70710678, 0.0, 0.0)
+# --- 公牛 GN-109K 六口排插 (built from colored primitives; no pxr/USD file) ---
+# Grounded on: (a) live ZED 2i photo of the real unit (white, rounded, compact,
+# side cord) and (b) BULL GN-109K spec: 6 outlets, body 204 x 92 x 29 mm, white,
+# master(总控) switch. The 92mm width => 2 rows x 3 columns. Per user's unit:
+# top row = 3 三口 (3-hole/三极 品字), bottom row = 3 双口 (2-hole/两极).
+# Built Z-up, bottom on table top z=0, long axis (204mm) along world X.
+STRIP_BASE = (0.45, 0.0, 0.0)
+_STRIP_BODY = (0.204, 0.092, 0.029)        # GN-109K L(X) x W(Y) x H(Z) meters
+_ROW_Y = (0.023, -0.023)                   # top row (三口), bottom row (双口)
+_COL_X = (-0.058, 0.0, 0.058)              # 3 columns
+_PATCH = (0.050, 0.040, 0.0015)            # per-outlet faceplate recess
+_STRIP_SLOT = (0.0015, 0.0063, 0.006)
+_STRIP_SLOT_SPACING = 0.0127
+_GND = (0.0018, 0.0070)                     # 三极 ground hole (taller)
+_C_BODY = (0.92, 0.92, 0.93); _C_PATCH = (0.72, 0.72, 0.76); _C_SLOT = (0.03, 0.03, 0.04)
+_C_SWITCH = (0.85, 0.10, 0.10); _C_CORD = (0.05, 0.05, 0.05); _C_METAL = (0.60, 0.60, 0.62)
 
 # Plug/socket spawn directly into the cloned single-env namespace. env_0 is
 # created by the InteractiveScene constructor (the single-env clone happens
 # BEFORE reset), so the props are authored after InteractiveScene(Cfg()) and
 # BEFORE sim.reset() -- matching the proven plug_scene_viewer.py spawn ordering.
 ENV_ROOT = "/World/envs/env_0"
+
+
+def spawn_six_outlet_strip(sim_utils, parent_path, base=STRIP_BASE):
+    """Build a BULL-style CN 6-outlet power strip from colored cuboids.
+
+    3 two-pin (双口) + 3 three-pin (三口) outlets, red rocker switch, own 3-pin
+    wall cord. Z-up, bottom resting on table top z=0, long axis along world X.
+    Returns the list of spawned prim paths. No pxr / no USD file needed.
+    """
+    bx, by, bz = base
+    L, W, H = _STRIP_BODY
+    paths = []
+
+    def box(name, center, size, color):
+        cfg = sim_utils.CuboidCfg(
+            size=size,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+        )
+        p = f"{parent_path}/{name}"
+        cfg.func(p, cfg, translation=(bx + center[0], by + center[1], bz + center[2]))
+        paths.append(p)
+
+    box("Strip_Body", (0.0, 0.0, H / 2.0), (L, W, H), _C_BODY)
+    sd = _STRIP_SLOT[2]
+    sz = H - sd / 2.0 + 0.0008                      # dark slots flush w/ top, recessed down
+    sp = _STRIP_SLOT_SPACING
+    idx = 0
+    for r, ry in enumerate(_ROW_Y):
+        kind = "triple" if r == 0 else "double"     # top row 三口(三极), bottom row 双口(两极)
+        for cx in _COL_X:
+            box(f"Strip_Patch_{idx}", (cx, ry, H + 0.00075), _PATCH, _C_PATCH)
+            if kind == "double":                    # 两极: 2 vertical flats
+                for dx in (-sp / 2, sp / 2):
+                    box(f"Strip_O{idx}_{'L' if dx < 0 else 'R'}", (cx + dx, ry, sz), _STRIP_SLOT, _C_SLOT)
+            else:                                   # 三极 品字: ground on top + 2 flats below
+                box(f"Strip_O{idx}_gnd", (cx, ry + 0.008, sz), (_GND[0], _GND[1], sd), _C_SLOT)
+                for dx in (-sp / 2, sp / 2):
+                    box(f"Strip_O{idx}_{'L' if dx < 0 else 'R'}", (cx + dx, ry - 0.004, sz), _STRIP_SLOT, _C_SLOT)
+            idx += 1
+    # red 总控 master switch near +X end
+    box("Strip_Switch", (0.090, 0.0, H + 0.004), (0.014, 0.030, 0.008), _C_SWITCH)
+    # side power cord (-X end) + 3-pin wall plug
+    box("Strip_Cord", (-0.128, 0.0, 0.007), (0.050, 0.008, 0.008), _C_CORD)
+    box("Strip_WallPlug", (-0.170, 0.0, 0.011), (0.030, 0.024, 0.020), _C_BODY)
+    for dy in (-0.0095, 0.0095):
+        box(f"Strip_WallPin_{'L' if dy < 0 else 'R'}", (-0.190, dy, 0.011), (0.012, 0.0016, 0.006), _C_METAL)
+    box("Strip_WallPin_G", (-0.190, 0.0, 0.019), (0.012, 0.0016, 0.006), _C_METAL)
+    return paths
 
 
 def parse_cli_args() -> argparse.Namespace:
@@ -342,21 +397,24 @@ def main() -> int:
     # in plug_scene_viewer.py via spawn_from_usd).
     # -----------------------------------------------------------------------
     spawned: list[str] = []
-    part_specs = [
-        (f"{ENV_ROOT}/Plug", cli_args.plug_usd, PLUG_TRANSLATION, PLUG_ORIENT),
-        (f"{ENV_ROOT}/Socket", cli_args.socket_usd, SOCKET_TRANSLATION, SOCKET_ORIENT),
-    ]
-    for prim_path, usd_path, translation, orientation in part_specs:
-        try:
-            usd_cfg = sim_utils.UsdFileCfg(usd_path=usd_path)
-            usd_cfg.func(prim_path, usd_cfg, translation=translation,
-                         orientation=orientation)
-            spawned.append(prim_path)
-            print(f"[fullscene] usd=OK {prim_path} <- {usd_path} "
-                  f"translation={translation} orientation={orientation}", flush=True)
-        except Exception as exc:
-            print(f"[fullscene] usd=FAILED {prim_path} <- {usd_path} : {exc}",
-                  flush=True)
+    # 2-pin plug (cn_two_pin_plug USD), pins up so they are visible.
+    try:
+        plug_cfg = sim_utils.UsdFileCfg(usd_path=cli_args.plug_usd)
+        plug_cfg.func(f"{ENV_ROOT}/Plug", plug_cfg,
+                      translation=PLUG_TRANSLATION, orientation=PLUG_ORIENT)
+        spawned.append(f"{ENV_ROOT}/Plug")
+        print(f"[fullscene] usd=OK {ENV_ROOT}/Plug <- {cli_args.plug_usd} "
+              f"translation={PLUG_TRANSLATION} orientation={PLUG_ORIENT}", flush=True)
+    except Exception as exc:
+        print(f"[fullscene] usd=FAILED Plug : {exc}", flush=True)
+    # 公牛/红牛 六口排插 — built from primitives (no USD file / no pxr needed).
+    try:
+        strip_paths = spawn_six_outlet_strip(sim_utils, ENV_ROOT, STRIP_BASE)
+        spawned.extend(strip_paths)
+        print(f"[fullscene] strip=OK {len(strip_paths)} prims "
+              f"(3 double + 3 triple outlets + red switch + cord) base={STRIP_BASE}", flush=True)
+    except Exception as exc:
+        print(f"[fullscene] strip=FAILED : {exc}", flush=True)
 
     # -----------------------------------------------------------------------
     # STEP 6: create the camera sensor (PLAIN /World path -- single env, no

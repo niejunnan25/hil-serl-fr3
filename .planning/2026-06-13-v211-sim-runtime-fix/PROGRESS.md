@@ -91,3 +91,21 @@ headless RGB → PNG（绕开上次"纯黑截图"的 X11 窗口抓取陷阱）�
 
 ### Phase 5 暂缓（不变）
 P6 worktree/分支清理仍因并发 ultracode 会话暂缓。SR-04 deferred runtime 收尾留待。
+
+---
+
+## 2026-06-13（续2）— 插座按真实硬件打磨（ZED 实拍 + 公牛 GN-109K）
+
+用户指明实物为公牛 **GN-109K / GN-B51D** 六口排插, 要求按 ZED 实拍图优化细节 (sim-to-real)。
+
+- **ZED 实拍 grounding**: live 抓帧 ZED 2i external (serial 36276705, 1080p, 只读无 motion)
+  → `evidence/.../zed_external_01.png`(+`_strip_crop.png`)。实物 = 白色、圆角、紧凑排插, 侧面出线。
+- **GN-109K 规格** (web 查证, 苏宁): 6 位、机身 **204×92×29mm**、白色、总控开关、新国标。
+  92mm 宽 ⇒ **2 排 × 3 孔** 布局 (非最初的 270×50 单排, 已纠正)。
+- **重建**: viewer 内 `spawn_six_outlet_strip` 改 GN-109K 尺寸 + 2排3列 + 红色总控 + 侧出线 + 三脚墙插。
+  渲染 `evidence/.../capture_gn109k_01.png` 与实拍形态/比例吻合。
+- **待用户确认**: GN-109K 目录标 "6位五孔"(universal 五孔), 而用户描述为 "3 双口 + 3 三口"。
+  当前按用户描述建 (上排三口/下排双口); 若实物为五孔可一键切换。孔位细节在当前机位偏小,
+  可出 close-up 复核。
+- 工具: `generate_socket_strip_usd.py`(独立 USD 生成器, 备用; 因 pxr 仅 app 内可用改为 viewer 内 primitive 直生),
+  `_zed_capture.py`(ZED 抓帧)。
