@@ -360,3 +360,48 @@ class TestPerStepTranslationCap:
         assert replaced is True
         denorm = np.linalg.norm(a[:3] * w.pos_scale)
         assert denorm <= w.max_step + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# B2a calibration wiring (deadzone + RT/LT thresholds loadable from profile)
+# ---------------------------------------------------------------------------
+from xbox_intervention import GRIPPER_IDX  # noqa: E402
+
+
+def _hub():
+    return TeleopDeviceHub(backend="mock", mock_backend=MockJoystickBackend())
+
+
+class TestCalibrationWiring:
+    def test_from_calibration_applies_deadzone_and_thresholds(self):
+        cal = {
+            "deadzone": 0.2,
+            "rt_threshold": 0.4,
+            "lt_threshold": 0.35,
+            "axis_ranges": {},
+            "n_rest": 1,
+            "n_range": 1,
+        }
+        w = XboxIntervention.from_calibration(_IdentityEnv(), _hub(), cal)
+        assert w.deadzone == pytest.approx(0.2)
+        assert w.rt_threshold == pytest.approx(0.4)
+        assert w.lt_threshold == pytest.approx(0.35)
+
+    def test_gripper_respects_custom_rt_threshold(self):
+        w = XboxIntervention(_IdentityEnv(), _hub(), rt_threshold=0.4)
+        below = w._state_to_action(XboxState(rt=0.2))
+        assert below[GRIPPER_IDX] == pytest.approx(0.0)  # 0.2 < 0.4 -> no close
+        above = w._state_to_action(XboxState(rt=0.5))
+        assert above[GRIPPER_IDX] == pytest.approx(1.0)  # 0.5 >= 0.4 -> close
+
+    def test_gripper_respects_custom_lt_threshold(self):
+        w = XboxIntervention(_IdentityEnv(), _hub(), lt_threshold=0.3)
+        below = w._state_to_action(XboxState(lt=0.1))
+        assert below[GRIPPER_IDX] == pytest.approx(0.0)
+        above = w._state_to_action(XboxState(lt=0.5))
+        assert above[GRIPPER_IDX] == pytest.approx(-1.0)
+
+    def test_default_thresholds_unchanged(self):
+        w = XboxIntervention(_IdentityEnv(), _hub())
+        assert w.rt_threshold == pytest.approx(0.05)
+        assert w.lt_threshold == pytest.approx(0.05)

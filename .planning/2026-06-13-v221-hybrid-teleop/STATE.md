@@ -35,8 +35,9 @@ A6 修复 review 的 2 critical+7 important，全量 225 passed。
   （/getstate → FK-bias 门 rc11 → /clearerr + /pose {"arr"}），approval 门保留。232 passed，
   Opus 对抗复核 APPROVE。详见 evidence/phase-b-B1a.md。
 - **B2a Xbox 标定脚手架（软件）✅**：xbox_calibrate.py（纯估计器 deadzone/range/RT-LT 阈值
-  + hub 采样器 + 交互 CLI；无设备 raise DeviceUnavailable）。7 tests，239 passed。
-  手柄接入后一条命令产出真实标定档（供 B2b/B4 写回 XboxIntervention）。
+  + hub 采样器 + 交互 CLI + load_calibration；无设备 raise DeviceUnavailable）。**闭环**：
+  XboxIntervention 加 rt_threshold/lt_threshold 参数 + `from_calibration(env,hub,cal)`，
+  RT/LT 阈值不再硬编码 0.05。245 passed。手柄接入后一条命令产出标定档 → from_calibration 直接加载。
 - **B1b / B2b / B3 / B4 真机**：见下"真机恢复条件"。
 
 ## Pending Blockers（真机门控）

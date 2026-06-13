@@ -94,12 +94,17 @@ class XboxIntervention(gym.ActionWrapper):
         action_indices: Optional[np.ndarray] = None,
         max_step: float = 0.003,
         pos_scale: float = 0.1,
+        rt_threshold: float = 0.05,
+        lt_threshold: float = 0.05,
     ):
         super().__init__(env)
         self.hub = hub
         self.scale = float(scale)
         self.deadzone = float(deadzone)
         self.action_indices = action_indices
+        # RT/LT gripper trigger thresholds (B2a-calibratable; default 0.05).
+        self.rt_threshold = float(rt_threshold)
+        self.lt_threshold = float(lt_threshold)
         # I1: enforce the per-step translation cap *inside* the teleop
         # toolchain so the 3mm/step invariant cannot be bypassed via the
         # Xbox path, regardless of whether the downstream env clamps.
@@ -115,6 +120,20 @@ class XboxIntervention(gym.ActionWrapper):
         self.last_state: XboxState = XboxState()
         # Track scale flips so A3 can record ``xbox_scale_mode``.
         self.scale_mode: str = "fine" if scale == SCALE_FINE else "coarse"
+
+    @classmethod
+    def from_calibration(cls, env, hub, calibration: dict, **kwargs):
+        """Build a wrapper from a B2a calibration profile (xbox_calibrate.py:
+        load_calibration). Maps deadzone + RT/LT thresholds from the profile;
+        any other constructor kwarg (scale, max_step, pos_scale, action_indices)
+        may be passed through and overrides the profile."""
+        params = dict(
+            deadzone=calibration["deadzone"],
+            rt_threshold=calibration["rt_threshold"],
+            lt_threshold=calibration["lt_threshold"],
+        )
+        params.update(kwargs)  # explicit kwargs win
+        return cls(env, hub, **params)
 
     # ------------------------------------------------------------------
     # Mapping helpers (tested directly via the suite)
@@ -150,11 +169,13 @@ class XboxIntervention(gym.ActionWrapper):
         action[DPITCH_IDX] = -dpad_y * self.scale
         action[DROLL_IDX] = dpad_x * self.scale
 
-        # Gripper: RT (close) wins over LT (open) when both held.
+        # Gripper: RT (close) wins over LT (open) when both held. Thresholds
+        # are B2a-calibratable (default 0.05) so a resting/biased trigger does
+        # not register a phantom grip.
         if self.gripper_enabled:
-            if s.rt > 0.05:
+            if s.rt > self.rt_threshold:
                 action[GRIPPER_IDX] = 1.0
-            elif s.lt > 0.05:
+            elif s.lt > self.lt_threshold:
                 action[GRIPPER_IDX] = -1.0
             else:
                 action[GRIPPER_IDX] = 0.0

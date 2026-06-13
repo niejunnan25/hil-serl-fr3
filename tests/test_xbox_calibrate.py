@@ -98,3 +98,25 @@ class TestHubSampler:
         hub = TeleopDeviceHub(backend="mock", mock_backend=backend)
         with pytest.raises(DeviceUnavailable):
             collect_samples(hub, n=3, sleep_s=0.0)
+
+
+class TestLoadCalibration:
+    def test_roundtrip(self, tmp_path):
+        from xbox_calibrate import load_calibration
+        rest = _rest([0.02, -0.03])
+        rng = [XboxState(left_x=-1.0, rt=1.0, lt=1.0), XboxState()]
+        cal = build_calibration(rest_samples=rest, range_samples=rng)
+        p = tmp_path / "cal.json"
+        import json
+        p.write_text(json.dumps(cal))
+        loaded = load_calibration(str(p))
+        assert loaded["deadzone"] == pytest.approx(cal["deadzone"])
+        assert loaded["rt_threshold"] == pytest.approx(cal["rt_threshold"])
+
+    def test_missing_key_raises(self, tmp_path):
+        from xbox_calibrate import load_calibration
+        import json
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps({"deadzone": 0.1}))  # missing thresholds
+        with pytest.raises((KeyError, ValueError)):
+            load_calibration(str(p))

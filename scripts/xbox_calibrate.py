@@ -94,6 +94,21 @@ def estimate_trigger_thresholds(
     return thr("rt"), thr("lt")
 
 
+CALIBRATION_REQUIRED_KEYS = ("deadzone", "rt_threshold", "lt_threshold")
+
+
+def load_calibration(path: str) -> dict:
+    """Load + validate a calibration profile written by build_calibration / the
+    CLI. Raises ValueError if a required key is missing (so a malformed profile
+    fails loudly rather than silently reverting to hardcoded defaults)."""
+    with open(path) as f:
+        cal = json.load(f)
+    missing = [k for k in CALIBRATION_REQUIRED_KEYS if k not in cal]
+    if missing:
+        raise ValueError(f"calibration profile {path!r} missing keys: {missing}")
+    return cal
+
+
 def build_calibration(rest_samples, range_samples) -> dict:
     """Assemble a JSON-serialisable calibration profile."""
     rt_thr, lt_thr = estimate_trigger_thresholds(rest_samples, range_samples)
