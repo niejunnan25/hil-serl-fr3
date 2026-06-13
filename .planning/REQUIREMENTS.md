@@ -25,15 +25,15 @@
 
 ## XBOX（v2.2.1 Phase A/B）
 
-- [ ] XBOX-01 XboxIntervention wrapper（pygame，按住 RB 介入，deadzone，7D delta）
+- [x] XBOX-01 XboxIntervention wrapper（pygame，按住 RB 介入，deadzone，7D delta） — A1; 17 tests green
 - [ ] XBOX-02 手柄 USB 接入 fr3-desktop-ts 并被识别（human，物理）
 - [ ] XBOX-03 Xbox e2e 真机验证（B2）
 - [ ] XBOX-04 fine-scale 档位 + deadzone 实标（B4）
 
 ## HYBRID（v2.2.1 Phase A/B）
 
-- [ ] HYBRID-01 GelloIntervention 介入改造：预算 + per-episode reset + LB 使能 + 互斥仲裁
-- [ ] HYBRID-02 record_hybrid_demos：单 episode 内 GELLO→RB→Xbox 连续录制，metadata 含 device/switch_step
+- [x] HYBRID-01 GelloIntervention 介入改造：预算 + per-episode reset + LB 使能 + 互斥仲裁 — A2; 18 tests green
+- [x] HYBRID-02 record_hybrid_demos：单 episode 内 GELLO→RB→Xbox 连续录制，metadata 含 device/switch_step — A3; 11 tests green
 - [ ] HYBRID-03 切换 e2e 真机验证：无跳变、仲裁正确（B3）
 
 ## DATA（v2.2.1 Phase C/D）

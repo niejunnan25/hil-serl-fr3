@@ -11,7 +11,7 @@
 
 ```
 v2.2 progress:   Phase 1 ✅ CLOSED | Phase 2 🟡 5/6 (P2-T3 待 motion 批准) | Phase 6 ⏳ (sim, 留 v2.2)
-v2.2.1 progress: Phase A ⏳ | Phase B ⏳ | Phase C ⏳ | Phase D ⏳ (0/4)
+v2.2.1 progress: Phase A ✅ CLOSED 2026-06-13 | Phase B ⏳ | Phase C ⏳ | Phase D ⏳
 ```
 
 ## v2.2 已完成部分（保留，不重做）
@@ -38,6 +38,29 @@ v2.2.1 progress: Phase A ⏳ | Phase B ⏳ | Phase C ⏳ | Phase D ⏳ (0/4)
 4. **安全事件约定沿用**：communication_test 曾误动 FR3，所有 motion wrapper 默认 blocked
 5. zktitan learner ✅ 已验证（6 GPU: 4×RTX 5880 Ada 48GB + 2×RTX PRO 6000 96GB，经 fr3-desktop-ts 跳板）
 
+## v2.2.1 Phase A ✅ CLOSED 2026-06-13
+
+- A0 baseline 回迁与入库：rsync desktop→local, 17/18_*.sh 恢复 (git blob ee4b589),
+  本地+desktop 17_phase2_readiness_gate 双 RC=0, 113 passed
+- A1 TeleopDeviceHub + XboxIntervention：hub 单例+mock backend, RB-deadman wrapper
+  with deadzone/scale-toggle/gripper, 26 tests
+- A2 GelloIntervention 介入改造 + TeleopArbiter：LB 使能 + per-engagement budget
+  reset + env.reset + 预算超限降级; arbiter 优先级真值表 (RB>xbox, only-LB>gello,
+  双按>xbox, 无→policy); 18 tests
+- A3 record_hybrid_demos：状态机 GELLO_FOLLOW --RB rising edge--> XBOX_DELTA,
+  切换零跳变, pkl schema 字段等价; 11 tests
+- A4 P2-T3 motion driver + 17_xbox / 18_hybrid e2e shell scaffolds：driver
+  dry-run/micro/full, max_step/max_total_delta 内置, approval 不可绕过; 13 tests
+- A5 同步+gate+收尾：rsync local→desktop, 19_phase_a_readiness_gate 双 RC=0
+  (217 passed local+desktop), REQUIREMENTS XBOX-01/HYBRID-01/HYBRID-02 勾选
+
+边界声明：Phase A 期间零真机 motion。所有 e2e shell 仅在 dry-run/preflight
+模式被 CI/测试覆盖；motion 模式需要显式 approval env var（FR3_GELLO_E2E_APPROVAL /
+FR3_XBOX_E2E_APPROVAL / FR3_HYBRID_E2E_APPROVAL）且用户现场 + E-stop 就位。
+
+Evidence: .planning/2026-06-13-v221-hybrid-teleop/evidence/phase-a-{baseline,gate}-{local,desktop}.log
+desktop-side raw 证据: fr3-desktop-ts:/home/robot/.planning/2026-06-13-v221-hybrid-teleop/evidence/phase-a-gate-desktop-raw/
+
 ## Decisions Log
 
 - 2026-06-09: Xbox→GELLO（数据采集精度 <1mm vs ~5mm）
@@ -58,18 +81,15 @@ v2.2.1 progress: Phase A ⏳ | Phase B ⏳ | Phase C ⏳ | Phase D ⏳ (0/4)
 - 2026-06-13: Phase A 规划完成 — plans/PLAN-A0..A5.md 六份（含 inline plan-checker 自检
   通过），A-RESEARCH.md 存档；发现并纳入 A0：Phase 1/2 代码仅存 desktop、从未入库
 
-## Next Step — 交给 Opus 4.8 xhigh 执行会话
+## Next Step — 交给 Opus 4.8 xhigh 执行 Phase B
 
 **启动方式**：新会话 `/model claude-opus-4-8` + effort xhigh，工作目录
-~/Documents/Code/hilserl-fr3，按 wave 顺序执行
-`.planning/2026-06-13-v221-hybrid-teleop/plans/PLAN-A0..A5.md`（顺序执行，禁 fan-out）。
+~/Documents/Code/hilserl-fr3，按 ROADMAP.md Phase B 顺序执行
+B1 (GELLO e2e P2-T3) → B2 (Xbox e2e) → B3 (切换 e2e) → B4 (实标)。
 
-**执行前提（均已就绪）**：
-- [x] 方案与验收标准落地：DECISIONS.md / ROADMAP（A–D Exit 判据）/ REQUIREMENTS（EVAL-01~03）
-- [x] Phase A 六份 PLAN 含 frontmatter/XML tasks/verification/must_haves
-- [x] 研究存档 A-RESEARCH.md（代码事实 + 约束）
-- [x] desktop SSH 可达、pygame 2.6.1 在位、上游参考仓库路径已记录
-- [x] 全部 planning 已 commit
-- Phase A 不需要：Xbox 手柄实体（B 才要）、motion 批准（B 才要）、zktitan（C 才要）
-
-**A2/A4 完成后**：回到 Fable 5 会话做 review gate，再继续 A3/A5。
+**B 阶段前置**：
+- [ ] Xbox 手柄 USB 接入 fr3-desktop-ts
+- [ ] 用户现场
+- [ ] E-stop 就位
+- [ ] 显式 approval 环境变量
+- [ ] 一次联合 motion session
