@@ -22,6 +22,7 @@ Run on the GPU host:
     /home/robot/IsaacLab/isaaclab.sh -p generate_gn109k_usd.py
 """
 import argparse
+import math
 import os
 
 # --- launch a headless Kit app so `pxr` becomes importable -------------------
@@ -52,15 +53,16 @@ def make_mat(stage, path, rgb, metallic=0.0, rough=0.5):
     return mat
 
 
-def add_box(stage, path, center, size, mat):
+def add_box(stage, path, center, size, mat, rot_deg=0.0):
     cx, cy, cz = center
     hx, hy, hz = size[0] / 2, size[1] / 2, size[2] / 2
-    verts = [
-        (cx - hx, cy - hy, cz + hz), (cx + hx, cy - hy, cz + hz),
-        (cx + hx, cy + hy, cz + hz), (cx - hx, cy + hy, cz + hz),
-        (cx - hx, cy - hy, cz - hz), (cx + hx, cy - hy, cz - hz),
-        (cx + hx, cy + hy, cz - hz), (cx - hx, cy + hy, cz - hz),
+    a = math.radians(rot_deg)
+    ca, sa = math.cos(a), math.sin(a)
+    local = [
+        (-hx, -hy, hz), (hx, -hy, hz), (hx, hy, hz), (-hx, hy, hz),
+        (-hx, -hy, -hz), (hx, -hy, -hz), (hx, hy, -hz), (-hx, hy, -hz),
     ]
+    verts = [(cx + x * ca - y * sa, cy + x * sa + y * ca, cz + z) for (x, y, z) in local]
     m = UsdGeom.Mesh.Define(stage, path)
     m.GetPointsAttr().Set([Gf.Vec3f(*v) for v in verts])
     m.GetFaceVertexCountsAttr().Set(_FC)
@@ -82,11 +84,11 @@ def build_strip(path):
     root = UsdGeom.Xform.Define(stage, "/GN109K")          # top-level: required for a valid defaultPrim
 
     M = lambda n, rgb, me=0.0, ro=0.5: make_mat(stage, f"/GN109K/Looks/{n}", rgb, me, ro)
-    m_white = M("White", (0.90, 0.90, 0.91), 0.0, 0.45)
-    m_floor = M("Recess", (0.30, 0.30, 0.33), 0.0, 0.6)
-    m_slot = M("Slot", (0.025, 0.025, 0.03), 0.0, 0.7)
-    m_red = M("Red", (0.80, 0.10, 0.10), 0.0, 0.4)
-    m_cord = M("Cord", (0.04, 0.04, 0.04), 0.0, 0.6)
+    m_white = M("White", (0.93, 0.93, 0.94), 0.0, 0.28)   # glossy white plastic
+    m_floor = M("Recess", (0.22, 0.22, 0.25), 0.0, 0.55)  # darker matte recess floor
+    m_slot = M("Slot", (0.02, 0.02, 0.025), 0.0, 0.18)    # near-black glossy slot
+    m_red = M("Red", (0.82, 0.09, 0.09), 0.0, 0.28)       # glossy red switch
+    m_cord = M("Cord", (0.04, 0.04, 0.04), 0.0, 0.5)
 
     R = "/GN109K"
     # base (top at z=base_h = recess floor level)
@@ -124,7 +126,7 @@ def build_strip(path):
     sw, sh_, sd = 0.0015, 0.0063, 0.004   # flat slot
     gw, gh = 0.0018, 0.0072               # ground slot (taller)
     sp = 0.0127
-    slot_top = base_h + 0.0006
+    slot_top = base_h + 0.0014            # ABOVE the gray floor patch (top base_h+0.0008) so 五孔 slots are visible
     idx = 0
     for cy in rows:
         for cx in cols:
@@ -133,9 +135,10 @@ def build_strip(path):
             # 三极 品字: ground (top) + two splayed L/N
             add_box(stage, f"{R}/O{idx}_E", (cx, cy + 0.010, slot_top - sd / 2),
                     (gw, gh, sd), m_slot)
-            for dx in (-0.0072, 0.0072):
+            for dx in (-0.0072, 0.0072):                          # 三极 L/N: 八字 splay
                 add_box(stage, f"{R}/O{idx}_t{'L' if dx<0 else 'R'}",
-                        (cx + dx, cy + 0.002, slot_top - sd / 2), (sw, sh_, sd), m_slot)
+                        (cx + dx, cy + 0.002, slot_top - sd / 2), (sw, sh_, sd), m_slot,
+                        rot_deg=(16.0 if dx < 0 else -16.0))
             # 两极: two vertical L/N
             for dx in (-sp / 2, sp / 2):
                 add_box(stage, f"{R}/O{idx}_b{'L' if dx<0 else 'R'}",
@@ -170,8 +173,8 @@ def build_plug(path):
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     root = UsdGeom.Xform.Define(stage, "/GN109K_Plug")     # top-level: required for a valid defaultPrim
     R = "/GN109K_Plug"
-    m_white = make_mat(stage, "/GN109K_Plug/Looks/PlugWhite", (0.88, 0.88, 0.90), 0.0, 0.45)
-    m_metal = make_mat(stage, "/GN109K_Plug/Looks/PlugMetal", (0.62, 0.62, 0.64), 0.9, 0.3)
+    m_white = make_mat(stage, "/GN109K_Plug/Looks/PlugWhite", (0.92, 0.92, 0.93), 0.0, 0.28)
+    m_metal = make_mat(stage, "/GN109K_Plug/Looks/PlugMetal", (0.70, 0.70, 0.72), 1.0, 0.22)
 
     # body (Z-up, bottom z=0); blades protrude +Z (insertion = downward when flipped)
     bx, by, bz = 0.034, 0.027, 0.024

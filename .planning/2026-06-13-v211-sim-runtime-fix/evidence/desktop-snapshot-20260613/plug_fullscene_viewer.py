@@ -86,8 +86,8 @@ DEFAULT_OUT_PNG = "/home/robot/plug_insertion_sim/sim-scene/_fullscene_capture.p
 # Camera framing: FR3 at origin; the 270mm BULL strip lies along world X,
 # centered at x=0.45 on the table top (z=0); the 2-pin plug sits in front of it.
 # Elevated 3/4 view so the 6 outlets on the strip's top face are visible.
-CAM_EYE = (0.74, 0.42, 0.52)
-CAM_TARGET = (0.45, 0.0, 0.03)
+CAM_EYE = (0.52, 0.13, 0.15)
+CAM_TARGET = (0.45, 0.0, 0.02)
 
 # 2-pin plug (still cn_two_pin_plug USD): in front of the strip, resting on table.
 # -90 deg about X (authored Y-up): pins point UP so they are visible.
