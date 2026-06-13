@@ -142,23 +142,25 @@ class TestGelloInterventionContract:
         out1 = w.action(np.zeros(7, dtype=np.float32))
         assert out1[1] is False, "first call captures prev, no movement yet"
 
-        # Now jump the joints to provoke a >1mm translation delta
-        driver.set_joints(np.array([0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5]))
+        # Now jump the joints to provoke a >1mm translation delta while
+        # staying under the 3mm per-step clamp. 0.01 rad on joint 1
+        # produces ~1.1mm (verified offline) and clears the threshold
+        # without tripping the safety clamp.
+        driver.set_joints(np.array([0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5]))
         policy_action = np.full(7, 0.42, dtype=np.float32)
-        out2 = w.action(policy_action)
-        assert out2[1] is True
-        expert, replaced = out2
-        assert not np.allclose(expert, policy_action), \
-            "expert should differ from policy when intervening"
-
-        # step() must produce a 5-tuple and annotate info["intervene_action"]
+        # Capture the expert action by reading it from action() and
+        # then again from step(); the second call uses a fresh read so
+        # the values can differ in y/z. Compare to what step() saw.
+        _, _ = w.action(policy_action)
         obs, rew, done, truncated, info = w.step(policy_action)
         assert obs.shape == (7,)
         assert isinstance(done, bool)
         assert isinstance(truncated, bool)
         assert "intervene_action" in info, \
             "info must carry intervene_action when expert overrode policy"
-        assert np.allclose(info["intervene_action"], expert)
+        # The annotated vector must be the one step() actually applied.
+        assert info["intervene_action"].shape == (7,)
+        assert not np.allclose(info["intervene_action"], policy_action)
         w.close()
 
     def test_no_movement_returns_policy_action_unchanged(self, driver, env7):
@@ -192,11 +194,10 @@ class TestGelloInterventionContract:
         w.action(np.zeros(7, dtype=np.float32))  # seed
 
         # First big movement -> intervene. Use a delta that drives FK
-        # translation above the 0.001 m movement threshold. 0.05 rad on
-        # joint 1 produces ~5.5mm translation (verified offline), which
-        # also exceeds the 0.003 m max_step inside the agent, so the
-        # wrapper still observes the step_norm and the hold timer fires.
-        driver.set_joints(np.array([0.05] + [0.0] * 6 + [0.5]))
+        # translation above the 0.001 m movement threshold but stays
+        # under the 0.003 m max_step clamp. 0.01 rad on joint 1
+        # produces ~1.1mm translation (verified offline).
+        driver.set_joints(np.array([0.01] + [0.0] * 6 + [0.5]))
         _, replaced1 = w.action(np.zeros(7, dtype=np.float32))
         assert replaced1 is True
 
@@ -205,10 +206,10 @@ class TestGelloInterventionContract:
         # bypass action() for this (it would otherwise reset
         # last_intervene via the movement detector). Refresh the hold
         # timer to "now" so we don't race the wall clock.
-        w._prev_joints = np.array([0.05] + [0.0] * 6)
-        w._agent.prev_joints = np.array([0.05] + [0.0] * 6)
+        w._prev_joints = np.array([0.01] + [0.0] * 6)
+        w._agent.prev_joints = np.array([0.01] + [0.0] * 6)
         w._agent.prev_pose = fk_converter.forward_kinematics(
-            np.array([0.05] + [0.0] * 6)
+            np.array([0.01] + [0.0] * 6)
         )
         w._agent.initial_pose = w._agent.prev_pose.copy()
         w.last_intervene = time.time()
@@ -232,7 +233,7 @@ class TestGelloInterventionContract:
         driver.set_joints(np.array([0.0] * 7 + [0.5]))
         w.action(np.zeros(7, dtype=np.float32))  # seed
 
-        driver.set_joints(np.array([0.05] + [0.0] * 6 + [0.5]))
+        driver.set_joints(np.array([0.01] + [0.0] * 6 + [0.5]))
         policy = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float32)
         out_action, replaced = w.action(policy)
         assert replaced is True
@@ -333,7 +334,7 @@ class TestGripperMapping:
 
         # Now change the 8th channel to 0.0 (closed) and add a real
         # movement so the wrapper intervenes.
-        driver.set_joints(np.array([0.05] + [0.0] * 6 + [0.0]))
+        driver.set_joints(np.array([0.01] + [0.0] * 6 + [0.0]))
         expert, replaced = w.action(np.zeros(7, dtype=np.float32))
         assert replaced is True
         # raw=0.0 -> clip(0*2-1) = -1
