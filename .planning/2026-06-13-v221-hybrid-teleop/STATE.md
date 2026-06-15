@@ -71,8 +71,10 @@ Phase D 完整过程端到端训成   ⏳ = 收官判据
 - **复位 = 笛卡尔（非 /jointreset）**：`/jointreset` 真机失败——切到 joint_position_controller 时抢不到
   PositionJointInterface（阻抗 franka_control 占着 FCI，"Could not find resource fr3_joint1"），关节移动静默
   no-op。改用 **reset_to_home**：用能工作的 /pose + cartesian_impedance 把末端插值回 home（限幅、慢、到位校验）。
-  home 由用户用 GELLO 摆好后 `teach.sh --set-home` 捕获存 home.json（drive_gello 定位、Ctrl-C 保存）。
-  自测：nudge 4.3cm→复位回 9.5mm 内。注：joint.launch allow_motion 门补丁已还原（不再走 /jointreset）。
+  home = **Franka Desk go_home** 的 FK 位姿（q=[0,-π/4,0,-3π/4,0,π/2,π/4] → FK=[0.307,0,0.487,夹爪朝下]），
+  已写 demos/hybrid/home.json。（`teach.sh --set-home` 仍可用 GELLO 设自定义 home。）
+  自测：nudge 4.3cm→复位回 9.5mm；复位到 go_home 实测末端 2.6mm、关节差 ~0.04rad（IK 收敛到 go_home 构型）。
+  注：joint.launch allow_motion 门补丁已还原（不再走 /jointreset）。
 
 ### 真机环境恢复（断电重启后，2026-06-15）
 - **desktop GPU 驱动**：断电后 boot 错内核（5.15-realtime，NVIDIA 580 只为 6.8.0-generic 构建）→ nvidia
