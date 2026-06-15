@@ -290,6 +290,20 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
             pass
         gripper_closed = False  # reset_gripper leaves the gripper OPEN
 
+        # Contact compliance for insertion: cap the per-axis position error
+        # (translational_clip) so the stiff (2000 N/m) impedance can't build more than
+        # ~10N against the socket and trip the Franka collision reflex. clip 0.01 gave
+        # 2000*0.01=20N which tripped on insertion (red light, arm frozen); 0.005 -> 10N.
+        # Stiffness stays 2000 so free-space GELLO following doesn't droop.
+        try:
+            cfg = {"translational_stiffness": 2000.0}
+            for _ax in ("x", "y", "z"):
+                cfg["translational_clip_" + _ax] = 0.005
+                cfg["translational_clip_neg_" + _ax] = 0.005
+            session.post(server.rstrip("/") + "/update_param", json=cfg, timeout=8.0)
+        except Exception:
+            pass
+
         from gello.dynamixel.driver import DynamixelDriver
         gello_dev = DynamixelDriver(list(range(8)), port="/dev/ttyUSB0", baudrate=57600,
                                     max_retries=1, use_fake_fallback=False)
@@ -420,6 +434,15 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
                     print(f"[GRIPPER t={tick}] -> {gcmd} (mode={mode})", flush=True)
 
             tick += 1
+            # Auto-recover from a collision reflex (red light, arm frozen, /pose
+            # silently ignored). /clearerr publishes a Franka error-recovery goal:
+            # a no-op when there's no error, recovery when there is. Every ~3s the
+            # arm self-recovers without the operator restarting.
+            if not dry_run and tick % 30 == 0:
+                try:
+                    session.post(server.rstrip("/") + "/clearerr", json={}, timeout=0.5)
+                except Exception:
+                    pass
             work = time.monotonic() - tick_t0
             if work > dt:
                 overruns += 1
