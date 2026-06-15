@@ -170,14 +170,15 @@ def main(argv=None):
         print("\n(跳过复位 --no-reset)")
 
     print("\n设备初始化中（GELLO/Xbox/ZED/FK，约 8-12s）...")
-    print(">>> 看到 '▶ 示教现在开始' 后开始操作：")
-    print("    GELLO 移动跟随 + 捏夹爪闭合；☰(Menu) 切 Xbox（GELLO 失效）；")
+    print(">>> 初始化后会提示 [ALIGN]：**把 GELLO 摆到和机器人一样的 HOME 姿态**（照着机械臂摆，")
+    print("    夹爪朝下、手臂形状对齐），按 Enter——这步是主从对齐，不对齐会乱动。")
+    print(">>> 然后 '▶ 示教现在开始'：GELLO 移动跟随 + 捏夹爪闭合；☰(Menu) 切 Xbox（GELLO 失效）；")
     print("    Xbox 按住 RB + 摇杆精插，RT 闭/LT 张；再按 ☰ 切回 GELLO。")
     print("    完成后在本终端按 Ctrl-C 结束示教。")
     print("-" * 64, flush=True)
 
     res = run(a.server, a.hz, a.duration, a.out_dir, a.max_step,
-              a.leader_scale, a.fps, dry_run=False)
+              a.leader_scale, a.fps, dry_run=False, align_prompt=True)
 
     # run() installed its own SIGINT handler; restore default for the prompts.
     signal.signal(signal.SIGINT, signal.SIG_DFL)

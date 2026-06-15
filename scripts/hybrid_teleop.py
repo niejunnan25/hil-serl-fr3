@@ -163,6 +163,14 @@ def reset_to_home(session, url, home_pose, max_step=0.006, hz=10.0, timeout=45.0
     """
     from relative_teleop import get_state, post_pose
 
+    # Clear any reflex/error state first — a stuck impedance silently ignores
+    # /pose (the robot freezes), which otherwise makes the reset time out.
+    try:
+        session.post(url.rstrip("/") + "/clearerr", json={}, timeout=10.0)
+        time.sleep(1.0)
+    except Exception:
+        pass
+
     home = np.asarray(home_pose, dtype=float).reshape(-1)[:7]
     dt = 1.0 / hz
     end = time.monotonic() + timeout
@@ -239,7 +247,7 @@ def drive_gello(session, url, leader_scale=DEFAULT_LEADER_SCALE, max_step=DEFAUL
 # Live hybrid recorder (validated on the robot; not unit-tested)
 # ---------------------------------------------------------------------------
 def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
-        pos_scale=0.1, rpy_scale=0.2):
+        pos_scale=0.1, rpy_scale=0.2, align_prompt=False):
     import signal
 
     from relative_teleop import _session, get_state, post_gripper, post_pose
@@ -298,9 +306,21 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
         cam_side = _ThreadedZED(SIDE_SERIAL, fps=fps)
         cam_wrist = _ThreadedZED(WRIST_SERIAL, fps=fps)
 
-        # Anchor GELLO to the robot's current joints (no startup jump).
+        # Leader-follower ALIGNMENT (critical): the GELLO and robot must start at
+        # the SAME joint config. The mapping q_gello_est = q0_robot + signs*(raw-raw0)
+        # only gives valid robot configs if q0_robot ~= the GELLO's config at raw0;
+        # otherwise GELLO motion drives the target out of joint range -> wild motion
+        # (the bug seen after a HOME reset, robot at HOME but GELLO elsewhere). So the
+        # operator aligns the GELLO to the robot's current (HOME) pose, THEN we anchor.
+        if align_prompt:
+            print("\n[ALIGN] 把 GELLO 摆到和机器人当前一样的姿态（机器人在 HOME——照它摆：夹爪朝下、"
+                  "手臂形状对齐），对齐后按 Enter 开始示教。", flush=True)
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                pass
         raw_gello0 = np.asarray(gello_dev.get_joints(), dtype=float)
-        q0_robot = np.asarray(s0["q"], dtype=float)
+        q0_robot = np.asarray(get_state(session, server, timeout=CTRL_T)["q"], dtype=float)
         mode = "gello"
         toggle_prev = False
 
