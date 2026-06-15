@@ -134,6 +134,15 @@ class _PygameBackend:
         if not _PYGAME_AVAILABLE:
             return
         try:
+            # Full pygame.init() (with a headless video driver) is REQUIRED:
+            # joystick axis/button state only refreshes when the SDL event
+            # subsystem is running and pygame.event.pump() is pumped. With
+            # only pygame.joystick.init(), pump() is a no-op and every read
+            # returns the rest state (axes 0, no buttons) — the device looks
+            # dead even while the operator moves it.
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            if not pygame.get_init():
+                pygame.init()
             if not pygame.joystick.get_init():
                 pygame.joystick.init()
             count = pygame.joystick.get_count()
@@ -169,28 +178,34 @@ class _PygameBackend:
                     return bool(self._joystick.get_button(i))
                 return False
 
+            def hat(i: int):
+                if i < self._joystick.get_numhats():
+                    return self._joystick.get_hat(i)
+                return (0, 0)
+
+            # Verified live on "Xbox Series X Controller" (SDL2 2.28, /dev/input/js0):
+            #   axes: 0=LX 1=LY 2=LT 3=RX 4=RY 5=RT
+            #     triggers rest at -1.0, fully pressed +1.0 -> remap to [0,1]
+            #   hat0 = D-pad: x in {-1,0,+1} (left/right), y in {-1,0,+1} (down/up)
+            #   buttons: 0=A 1=B 2=X 3=Y 4=LB 5=RB 6=View 7=Menu 8=Xbox 9=LS 10=RS
+            hx, hy = hat(0)
             return XboxState(
                 left_x=axis(0),
                 left_y=axis(1),
-                right_x=axis(2),
-                right_y=axis(3),
-                # D-pad arrives as buttons 11/12 on the standard XInput
-                # mapping; fall back to 0 if fewer buttons are present.
-                dpad_x=1.0 if button(11) else (-1.0 if button(12) else 0.0),
-                dpad_y=1.0 if button(13) else (-1.0 if button(14) else 0.0),
-                # Triggers arrive as axes 4/5 in [0,1] on XInput; some
-                # drivers expose them as buttons (6, 7) instead. Pick
-                # whichever is non-zero in the standard reading.
-                rt=axis(4) if axis(4) > 0.05 else (1.0 if button(7) else 0.0),
-                lt=axis(5) if axis(5) > 0.05 else (1.0 if button(6) else 0.0),
+                right_x=axis(3),
+                right_y=axis(4),
+                dpad_x=float(hx),
+                dpad_y=float(hy),
+                rt=(axis(5) + 1.0) / 2.0,
+                lt=(axis(2) + 1.0) / 2.0,
                 a=button(0),
                 b=button(1),
                 x=button(2),
                 y=button(3),
                 lb=button(4),
                 rb=button(5),
-                back=button(8),
-                start=button(9),
+                back=button(6),
+                start=button(7),
             )
 
 
