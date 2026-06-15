@@ -61,6 +61,8 @@ URDF_PATH = "/home/robot/fairo/polymetis/polymetis/data/franka_panda/panda_arm.u
 # Franka-hand flange(panda_link8)->EE (F_T_EE), calibrated live vs server O_T_EE.
 T_OFFSET_TRANS = np.array([0.0, 0.0, 0.1034])
 T_OFFSET_RZ_DEG = -45.0
+# franka_server /jointreset default home (flag reset_joint_target).
+RESET_JOINT_TARGET = np.array([0.0, 0.0, 0.0, -1.9, 0.0, 2.0, 0.0])
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,13 @@ def arbiter_step(mode, toggle_now, toggle_prev) -> Tuple[str, bool]:
     if toggle_now and not toggle_prev:
         return ("xbox" if mode == "gello" else "gello"), True
     return mode, False
+
+
+def home_reached(q, target=RESET_JOINT_TARGET, tol=0.15) -> bool:
+    """True if every joint of q is within tol (rad) of the home target."""
+    q = np.asarray(q, dtype=float).reshape(-1)[:7]
+    target = np.asarray(target, dtype=float).reshape(-1)[:7]
+    return bool(np.max(np.abs(q - target)) <= tol)
 
 
 # ---------------------------------------------------------------------------
@@ -139,17 +148,91 @@ def pose_delta(currpos, desired):
     return dxyz, dR.as_rotvec()
 
 
-def reset_to_home(session, url, timeout=120.0):
-    """Home the robot via franka_server /jointreset (server default home
-    [0,0,0,-1.9,0,2,0]). The server stops impedance, runs the joint controller
-    to the home config (~15-20s, BLOCKING), then RESTARTS impedance — so /pose
-    works again on return. The robot moves AUTONOMOUSLY: the caller MUST ensure
-    the workspace is clear and the operator is on the E-stop first.
+def reset_to_home(session, url, home_pose, max_step=0.006, hz=10.0, timeout=45.0,
+                  pos_tol=0.01, rot_tol=0.06):
+    """CARTESIAN reset: interpolate the EE to home_pose (7D xyzw) via /pose on the
+    already-running cartesian_impedance controller, clamped to max_step per tick.
+
+    This deliberately AVOIDS franka_server /jointreset: that switches to the
+    joint_position_controller, which cannot claim the PositionJointInterface while
+    impedance's franka_control still holds FCI ("Could not find resource fr3_joint1
+    in PositionJointInterface" — verified live), so the joint move silently no-ops.
+    The Cartesian path uses the controller that already works. The robot moves
+    slowly; the operator must keep the area clear + E-stop in hand. RAISES if the
+    home pose is not reached within timeout. Returns the reached pose.
     """
-    base = url.rstrip("/")
-    r = session.post(base + "/jointreset", json={}, timeout=timeout)
-    r.raise_for_status()
-    time.sleep(1.0)  # let impedance settle before the first /pose
+    from relative_teleop import get_state, post_pose
+
+    home = np.asarray(home_pose, dtype=float).reshape(-1)[:7]
+    dt = 1.0 / hz
+    end = time.monotonic() + timeout
+    currpos = None
+    while time.monotonic() < end:
+        currpos = np.asarray(get_state(session, url, timeout=1.0)["pose"], dtype=float)
+        dxyz, drotvec = pose_delta(currpos, home)
+        if float(np.linalg.norm(dxyz)) < pos_tol and float(np.linalg.norm(drotvec)) < rot_tol:
+            return currpos
+        nextpos, _s, _r = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
+        post_pose(session, url, nextpos, timeout=1.0)
+        time.sleep(dt)
+    perr = float(np.linalg.norm(pose_delta(currpos, home)[0])) if currpos is not None else -1.0
+    raise RuntimeError(f"cartesian reset timeout; remaining pos err {perr:.3f} m")
+
+
+def drive_gello(session, url, leader_scale=DEFAULT_LEADER_SCALE, max_step=DEFAULT_MAX_STEP,
+                hz=10.0, duration=600.0, gripper=True):
+    """Drive the robot via GELLO (Route E) with NO recording until SIGINT/duration,
+    for positioning (e.g. capturing a home pose). Returns the final (pose7, q7)."""
+    import signal
+
+    from gello.dynamixel.driver import DynamixelDriver
+    from relative_teleop import get_state, post_gripper, post_pose
+
+    stop = {"f": False}
+
+    def _s(sig, frm):  # noqa: ARG001
+        stop["f"] = True
+    signal.signal(signal.SIGINT, _s)
+    signal.signal(signal.SIGTERM, _s)
+
+    fk = CorrectFK()
+    g = DynamixelDriver(list(range(8)), port="/dev/ttyUSB0", baudrate=57600,
+                        max_retries=1, use_fake_fallback=False)
+    s0 = get_state(session, url, timeout=1.0)
+    q0 = np.asarray(s0["q"], dtype=float)
+    raw0 = np.asarray(g.get_joints(), dtype=float)
+    gc = float(np.asarray(s0["gripper_pos"]).reshape(-1)[0]) < 0.04
+    dt = 1.0 / hz
+    end = time.monotonic() + duration
+    last = np.asarray(s0["pose"], dtype=float)
+    lastq = q0
+    print("[SET-HOME] ▶ 用 GELLO 把机器人摆到起始位姿；摆好后按 Ctrl-C 保存为 home", flush=True)
+    try:
+        while not stop["f"] and time.monotonic() < end:
+            t0 = time.monotonic()
+            st = get_state(session, url, timeout=1.0)
+            currpos = np.asarray(st["pose"], dtype=float)
+            last = currpos
+            lastq = np.asarray(st["q"], dtype=float)
+            raw = np.asarray(g.get_joints(), dtype=float)
+            qt = gello_joint_target(raw, raw0, q0, DEFAULT_JOINT_SIGNS, leader_scale)
+            dxyz, drot = pose_delta(currpos, fk.fk(qt))
+            nextpos, _a, _b = apply_cartesian_delta(currpos, dxyz, drot, max_step)
+            post_pose(session, url, nextpos, timeout=1.0)
+            if gripper:
+                gcmd, gc = gripper_edge(float(raw[7]), gc, GRIPPER_CLOSE_BELOW, GRIPPER_OPEN_ABOVE)
+                if gcmd:
+                    post_gripper(session, url, gcmd, timeout=1.0)
+            sl = dt - (time.monotonic() - t0)
+            if sl > 0:
+                time.sleep(sl)
+    finally:
+        try:
+            g.close()
+        except Exception:
+            pass
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    return last, lastq
 
 
 # ---------------------------------------------------------------------------

@@ -29,8 +29,22 @@ if SCRIPT_DIR not in sys.path:
 
 import numpy as np  # noqa: E402
 
-from hybrid_teleop import DEFAULT_LEADER_SCALE, reset_to_home, run  # noqa: E402
+from hybrid_teleop import DEFAULT_LEADER_SCALE, drive_gello, reset_to_home, run  # noqa: E402
 from relative_teleop import DEFAULT_MAX_STEP, _session, get_state  # noqa: E402
+
+
+def save_home(path: str, pose, q=None) -> None:
+    """Persist a home pose (7D) + optional joint config to json."""
+    d = {"pose": [float(x) for x in np.asarray(pose).reshape(-1)[:7]]}
+    if q is not None:
+        d["q"] = [float(x) for x in np.asarray(q).reshape(-1)[:7]]
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2)
+
+
+def load_home(path: str):
+    with open(path) as f:
+        return np.asarray(json.load(f)["pose"], dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +105,15 @@ def main(argv=None):
     p.add_argument("--leader-scale", type=float, default=DEFAULT_LEADER_SCALE)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--no-reset", dest="reset", action="store_false",
-                   help="skip the autonomous home reset")
+                   help="skip the home reset")
+    p.add_argument("--set-home", dest="set_home", action="store_true",
+                   help="drive via GELLO, then Ctrl-C to capture the current pose as home")
+    p.add_argument("--home-file", default=None,
+                   help="home pose json (default <out-dir>/home.json)")
     a = p.parse_args(argv)
 
     os.makedirs(a.out_dir, exist_ok=True)
+    home_file = a.home_file or os.path.join(a.out_dir, "home.json")
     session = _session()
 
     print("=" * 64)
@@ -107,18 +126,46 @@ def main(argv=None):
         return 2
     print(f"已连接。当前位姿 currpos={np.round(np.asarray(s0['pose'])[:3], 4).tolist()}")
 
-    if a.reset:
-        print("\n⚠ 复位会让机器人**自主运动**到 HOME [0,0,0,-1.9,0,2,0]（~15-20s）。")
-        print("  请确认：工作区无障碍、你站在 E-stop 旁。")
-        if not _confirm("  确认后按 Enter 开始复位（Ctrl-C 取消）..."):
+    # ---- set-home: position via GELLO, capture current pose as home ----
+    if a.set_home:
+        print("\n[SET-HOME] 用 GELLO 把机器人摆到你要的起始位姿（夹爪张开、插头上方等）。")
+        print("  摆好后在本终端按 Ctrl-C，当前位姿就保存为 home。")
+        if not _confirm("  确认区域安全、E-stop 在手，按 Enter 开始驱动（Ctrl-C 取消）..."):
             return 1
-        print("复位中（机器人运动，~15-20s）...", flush=True)
         try:
-            reset_to_home(session, a.server)
+            pose, q = drive_gello(session, a.server, leader_scale=a.leader_scale,
+                                  max_step=a.max_step, hz=a.hz)
         except Exception as e:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            print(f"\n[ERR] set-home 驱动失败: {type(e).__name__}: {e}")
+            return 3
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        save_home(home_file, pose, q)
+        print(f"\n✓ home 已保存: {home_file}")
+        print(f"  pose(xyz)={[round(float(x), 4) for x in pose[:3]]}  (full 7D + q stored)")
+        print("  之后直接 ./scripts/teach.sh 就会先笛卡尔复位回这个 home 再开录。")
+        return 0
+
+    # ---- normal: cartesian reset to home, then record ----
+    if a.reset:
+        if not os.path.exists(home_file):
+            print(f"\n[ERR] 没有 home 文件: {home_file}")
+            print("  先设 home: ./scripts/teach.sh --set-home   或跳过复位: --no-reset")
+            return 4
+        home = load_home(home_file)
+        print(f"\n⚠ 复位：机器人将**笛卡尔缓慢移动**回 home (xyz={[round(float(x), 3) for x in home[:3]]})。")
+        print("  确认夹爪/路径上无障碍、E-stop 在手。")
+        if not _confirm("  按 Enter 开始复位（Ctrl-C 取消）..."):
+            return 1
+        print("复位中（机器人移动）...", flush=True)
+        try:
+            reset_to_home(session, a.server, home, max_step=max(a.max_step, 0.006))
+        except (Exception, KeyboardInterrupt) as e:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
             print(f"[ERR] 复位失败: {type(e).__name__}: {e}")
             return 3
-        print("✓ 复位完成，已回 HOME，阻抗已重启。")
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        print("✓ 复位完成，已回 home。")
     else:
         print("\n(跳过复位 --no-reset)")
 

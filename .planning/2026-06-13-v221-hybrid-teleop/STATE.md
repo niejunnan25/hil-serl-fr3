@@ -66,9 +66,13 @@ Phase D 完整过程端到端训成   ⏳ = 收官判据
 - **真机验证 ✅ 2026-06-15**：手臂跟随 10.12cm/0.75mm 每拍（vs 速度积分 2.28cm/0.06mm）；夹爪 close+open
   触发成功；10Hz/overruns=0/validate PASS。Xbox 段尚未真机走通（待用户用 teach.sh 采全流程）。
 - **用户自驱采集 CLI**：`scripts/teach.sh`（→ teach_session.py）。在 desktop 终端直接跑：连通检查 →
-  /jointreset 复位 HOME[0,0,0,-1.9,0,2,0]（自主运动，先 Enter 确认）→ 设备初始化 → "▶ 示教现在开始" →
-  操作(GELLO 抓取/☰ 切 Xbox 精插)→ Ctrl-C 停 → 问 成功/失败/丢弃 + 备注 → 标注入 demos/hybrid/index.jsonl。
-  起止信号在终端内，操作者直接掌控时机。
+  **笛卡尔复位回 home** → 设备初始化 → "▶ 示教现在开始" → 操作(GELLO 抓取/☰ 切 Xbox 精插)→ Ctrl-C 停 →
+  问 成功/失败/丢弃 + 备注 → 标注入 demos/hybrid/index.jsonl。起止信号在终端内，操作者直接掌控时机。
+- **复位 = 笛卡尔（非 /jointreset）**：`/jointreset` 真机失败——切到 joint_position_controller 时抢不到
+  PositionJointInterface（阻抗 franka_control 占着 FCI，"Could not find resource fr3_joint1"），关节移动静默
+  no-op。改用 **reset_to_home**：用能工作的 /pose + cartesian_impedance 把末端插值回 home（限幅、慢、到位校验）。
+  home 由用户用 GELLO 摆好后 `teach.sh --set-home` 捕获存 home.json（drive_gello 定位、Ctrl-C 保存）。
+  自测：nudge 4.3cm→复位回 9.5mm 内。注：joint.launch allow_motion 门补丁已还原（不再走 /jointreset）。
 
 ### 真机环境恢复（断电重启后，2026-06-15）
 - **desktop GPU 驱动**：断电后 boot 错内核（5.15-realtime，NVIDIA 580 只为 6.8.0-generic 构建）→ nvidia

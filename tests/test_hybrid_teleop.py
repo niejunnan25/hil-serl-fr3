@@ -29,7 +29,12 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from hybrid_teleop import gello_joint_target, arbiter_step  # noqa: E402
+from hybrid_teleop import (  # noqa: E402
+    RESET_JOINT_TARGET,
+    arbiter_step,
+    gello_joint_target,
+    home_reached,
+)
 
 
 class TestGelloJointTarget:
@@ -95,3 +100,24 @@ class TestArbiterStep:
     def test_idle_no_press(self):
         mode, switched = arbiter_step("gello", toggle_now=False, toggle_prev=False)
         assert mode == "gello" and switched is False
+
+
+class TestHomeReached:
+    """home_reached guards reset success (server /jointreset can silently no-op)."""
+
+    def test_at_home_true(self):
+        assert home_reached(RESET_JOINT_TARGET) is True
+
+    def test_within_tol_true(self):
+        q = np.asarray(RESET_JOINT_TARGET) + np.array([0.1, -0.1, 0.05, 0.0, 0.0, 0.1, -0.05])
+        assert home_reached(q, tol=0.15) is True
+
+    def test_far_from_home_false(self):
+        # the actual failed-reset q from the live bug
+        q = np.array([0.02, -0.001, 0.282, -2.157, -0.336, 1.033, 1.095])
+        assert home_reached(q, tol=0.15) is False
+
+    def test_one_joint_over_tol_false(self):
+        q = np.asarray(RESET_JOINT_TARGET).copy()
+        q[6] += 0.3
+        assert home_reached(q, tol=0.15) is False

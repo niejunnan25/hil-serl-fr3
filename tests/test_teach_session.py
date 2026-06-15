@@ -10,7 +10,31 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from teach_session import labeled_path, make_index_record, parse_label  # noqa: E402
+import numpy as np  # noqa: E402
+
+from teach_session import (  # noqa: E402
+    labeled_path,
+    load_home,
+    make_index_record,
+    parse_label,
+    save_home,
+)
+
+
+class TestHomeIO:
+    def test_save_load_roundtrip(self, tmp_path):
+        path = str(tmp_path / "home.json")
+        pose = [0.31, 0.02, 0.35, 0.0, 0.0, 0.0, 1.0]
+        q = [0.0, -0.5, 0.0, -2.0, 0.0, 1.5, 0.7]
+        save_home(path, pose, q)
+        loaded = load_home(path)
+        assert loaded.shape == (7,)
+        np.testing.assert_allclose(loaded, pose, atol=1e-9)
+
+    def test_save_without_q(self, tmp_path):
+        path = str(tmp_path / "home.json")
+        save_home(path, np.array([0.4, 0.0, 0.3, 0, 0, 0, 1]))
+        np.testing.assert_allclose(load_home(path), [0.4, 0.0, 0.3, 0, 0, 0, 1], atol=1e-9)
 
 
 class TestLabeledPath:
