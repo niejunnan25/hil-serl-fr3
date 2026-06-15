@@ -7,12 +7,12 @@ depends_on: [A1]
 files_modified: [scripts/p2_t3_e2e_motion_driver.py, scripts/setup/17_xbox_e2e_motion_test.sh, scripts/setup/18_hybrid_switch_e2e_test.sh, tests/test_p2t3_motion_driver.py, tests/test_e2e_scaffolding_xbox_hybrid.py]
 autonomous: true
 requirements: [GELLO-03(prep), XBOX-03(prep), HYBRID-03(prep)]
-review_gate: fable-5
+review_gate: opus-adversarial
 ---
 
 <objective>
 补全 Phase B 联合验收所需的全部驱动与脚手架。本 plan 产物在 Phase A 内
-只允许 dry-run/mock 运行；真机 motion 留给 Phase B。安全关键 — Fable 5 review gate。
+只允许 dry-run/mock 运行；真机 motion 留给 Phase B。安全关键 — Opus 对抗 review gate。
 </objective>
 
 <context>
@@ -42,7 +42,7 @@ tests/test_e2e_scaffolding_xbox_hybrid.py 仿 test_gello_e2e_scaffolding.py（21
 - 全部测试绿；`bash 17_... device-echo` 与 `18_... device-echo` 在无手柄环境下
   优雅报"设备缺失"而非崩溃
 - 三个 approval 变量缺失时，任何脚本路径都无法到达 POST /pose（测试断言）
-- **Fable 5 review gate**：重点审 approval gate 不可绕过性与 dry-run 默认性
+- **Opus 对抗 review gate**：重点审 approval gate 不可绕过性与 dry-run 默认性
 </verification>
 
 <must_haves>

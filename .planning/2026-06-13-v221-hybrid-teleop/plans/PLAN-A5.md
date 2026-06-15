@@ -39,7 +39,7 @@ teleop toolchain (+gate evidence)"。
 
 <verification>
 - 19_phase_a_readiness_gate.sh 本地 + desktop 双 RC=0，evidence 留档
-- A2/A4 的 Fable 5 review 记录已在 evidence/（gate 的前置检查项）
+- A2/A4 的对抗 review 记录（Opus）已在 evidence/（gate 的前置检查项）
 - git log 含基线 commit（A0）与 Phase A commit，diff 仅含 in-scope 文件
 </verification>
 

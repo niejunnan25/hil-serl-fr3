@@ -60,5 +60,8 @@ E-stop 就位、用户在场；沿用 approval 环境变量模式。
 ## 附带事项
 - 2026-06-12 事故：v2.2 planning 文件（未 commit）随 working-tree reset 丢失，已于
   2026-06-13 从 transcript 重建；此后 .planning 变更随做随 commit。
-- 执行方式（用户 2026-06-12 指令）：禁用 fan-out subagents 与 ultracode dynamic workflows
-  （Claude Desktop >40GB 内存事故）；Superpowers 规范 + 顺序执行 + GSD。
+- 执行方式（2026-06-13 更正，覆盖 2026-06-12 禁用令；2026-06-15 对齐）：fan-out subagents 与
+  ultracode workflows 已解禁、按需调用（审慎提醒：2026-06-12 >40GB 事故，先清残留 worktree）；
+  Fable 5 权限切断，grill/discuss/plan/review 改 Opus Max/ultracode，execute 仍 Opus 4.8 xhigh；
+  Superpowers 规范 + GSD 官方流程仍为骨架；真机运动执行仍顺序 + human-in-loop 握手。
+  见 model-stage-policy / prefer-workflows / v2.1.1 DECISIONS.md。

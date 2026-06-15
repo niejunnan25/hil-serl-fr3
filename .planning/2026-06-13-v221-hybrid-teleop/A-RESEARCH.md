@@ -36,5 +36,5 @@
 
 - A0 必须先行：desktop→local rsync 回迁 + git 入库，否则本地无法开发/测试
 - 全部新代码 TDD（superpowers 纪律），mock 设备后端，零真机 motion
-- A2/A4 为安全关键 → 执行后需 Fable 5 review gate（模型分工决议）
+- A2/A4 为安全关键 → 执行后需 review gate（模型分工决议）〔2026-06-15 更正：Fable 5 已停用，gate 改 Opus 独立对抗 review，见 model-stage-policy〕
 - 双设备共享一个 pygame 实例 → 需要 TeleopDeviceHub 单点持有 joystick 状态

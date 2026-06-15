@@ -7,12 +7,12 @@ depends_on: [A1]
 files_modified: [scripts/gello_intervention.py, scripts/gello_cartesian_delta_agent.py, scripts/teleop_arbiter.py, tests/test_gello_intervention_contract.py, tests/test_teleop_arbiter.py]
 autonomous: true
 requirements: [HYBRID-01]
-review_gate: fable-5
+review_gate: opus-adversarial
 ---
 
 <objective>
 让 GELLO 介入可在长 horizon 训练中安全使用：LB 使能、按次接入预算、每 episode 重置、
-与 Xbox 的互斥仲裁。安全关键 — 完成后需 Fable 5 review gate 方可进入 A3。
+与 Xbox 的互斥仲裁。安全关键 — 完成后需 Opus 独立对抗 review gate 方可进入 A3。
 </objective>
 
 <context>
@@ -47,7 +47,7 @@ scripts/teleop_arbiter.py — TeleopArbiter：组合两个 intervention wrapper 
 <verification>
 - 全套 pytest 绿（含既有 GELLO 套件零回归）
 - 仲裁真值表测试逐行对应 DECISIONS.md 决策 6
-- **Fable 5 review gate**：plan 执行完后由 Fable 5 会话审查 diff（重点：预算逻辑、
+- **Opus 对抗 review gate**：plan 执行完后由 Opus Max/ultracode 独立对抗复核 diff（重点：预算逻辑、
   reset 路径、异常降级），review 记录写入 evidence/ 后方可标记完成
 </verification>
 

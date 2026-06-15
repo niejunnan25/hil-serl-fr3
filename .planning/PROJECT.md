@@ -19,17 +19,24 @@ GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy
 详见 2026-06-13-v221-hybrid-teleop/DECISIONS.md。
 v2.3 候选：RLDG 蒸馏 SAC specialist 数据进 pi05。
 
-## 执行策略（用户 2026-06-13 决议）
+## 执行策略（2026-06-13 决议；2026-06-15 对齐 Fable-5 切断 + fan-out 解禁）
 
-| 阶段 | 模型 |
+| 阶段 | 模型 / 模式 |
 |------|------|
-| grill-me / discuss-phase / plan-phase / review | Fable 5（最高 effort） |
+| grill-me / discuss-phase / plan-phase / review | Opus Max（最高 effort）；按需 ultracode + fan-out 多视角 |
 | execute-phase（全部） | Opus 4.8 xhigh |
 
-- 安全关键 plan（A2/A4 等标 `review_gate: fable-5`）执行后必须过 Fable 5 review 才算完成
-- **禁用 fan-out subagents 与 ultracode dynamic workflows**（2026-06-12 内存事故决议）；
-  顺序执行 + Superpowers 纪律（TDD、verification-before-completion）+ GSD 官方流程
-- 模型切换发生在 GSD phase 边界（换会话 /model）
+- **Fable 5 权限已切断**：原指派 Fable 5 的高杠杆思考（grill/discuss/plan/review）改由 Opus Max/ultracode 承担。
+- 安全关键 plan（A2/A4 等标 `review_gate: opus-adversarial`）执行后必须过**独立对抗式 review pass**
+  （Opus Max/ultracode，可 fan-out 多视角校验）才算完成——**不再要求 Fable 5**（已无可回退）。
+- **fan-out subagents 与 ultracode workflows 已解禁、按需调用**（2026-06-13 覆盖 2026-06-12 禁用令）；
+  GSD 官方流程 + Superpowers 纪律（TDD、verification-before-completion）仍为执行骨架。
+  审慎提醒：2026-06-12 曾因 fan-out + ultracode + 遗留 worktree 致 Claude Desktop >40GB，
+  扩大并行前先清 `.claude/worktrees/wf_*`。
+- 真机运动执行（teleop/示教/运动）仍按下方「安全边界」+ human-in-loop 握手起停（顺序、人机同步，不做无人值守 fan-out）；
+  批量 fan-out / ultracode 用于 sim / 研究 / 评审。
+- 现单一 Opus 模型：阶段切换体现在 effort / ultracode 档位与是否 fan-out，"换会话 /model" 基本作废。
+- 权威依据：全局记忆 model-stage-policy / prefer-workflows、v2.1.1 DECISIONS.md（lines 11-13）、STATE.md（2026-06-13 晚 反转）。
 
 ## 安全边界（不可妥协）
 

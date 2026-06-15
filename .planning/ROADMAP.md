@@ -56,9 +56,9 @@ P2-T1/T2/T4/T5/T6 ✅（113 tests desktop gate RC=0）。P2-T3（端到端 motio
 |------|------|------|----------|
 | A0 | 1 | 基线回迁与入库（desktop→local rsync + 首次 git commit；Phase 1/2 代码现仅存 desktop） | — |
 | A1 | 2 | TeleopDeviceHub + XboxIntervention（RB deadman、deadzone、档位、TDD mock 后端） | — |
-| A2 | 3 | GelloIntervention 介入改造（LB 使能、按次接入预算、env.reset 重置）+ TeleopArbiter 互斥仲裁 | ✔ Fable 5 review gate |
+| A2 | 3 | GelloIntervention 介入改造（LB 使能、按次接入预算、env.reset 重置）+ TeleopArbiter 互斥仲裁 | ✔ 对抗 review gate (Opus) |
 | A3 | 4 | record_hybrid_demos：GELLO 段→RB 单向切换→Xbox 段，零跳变 + metadata + pkl schema 等价 | — |
-| A4 | 4 | P2-T3 motion driver + 17/18 e2e 脚手架（全部 approval-gated，Phase A 内仅 dry-run/mock） | ✔ Fable 5 review gate |
+| A4 | 4 | P2-T3 motion driver + 17/18 e2e 脚手架（全部 approval-gated，Phase A 内仅 dry-run/mock） | ✔ 对抗 review gate (Opus) |
 | A5 | 5 | 双向同步 + 19_phase_a_readiness_gate.sh（本地+desktop 双 RC=0）+ planning 翻转入库 | — |
 
 ## v2.2.1 Phase B: 联合真机验收（一次 motion 批准 session）
