@@ -101,7 +101,9 @@ def main(argv=None):
     p.add_argument("--out-dir", default="/home/robot/hilserl-fr3/demos/hybrid")
     p.add_argument("--hz", type=float, default=10.0)
     p.add_argument("--duration", type=float, default=600.0)
-    p.add_argument("--max-step", type=float, default=DEFAULT_MAX_STEP)
+    p.add_argument("--max-step", type=float, default=0.02,
+                   help="per-tick Cartesian translation cap (m); 0.02=20mm/tick=20cm/s "
+                        "for responsive GELLO following (was 3mm, too slow)")
     p.add_argument("--leader-scale", type=float, default=DEFAULT_LEADER_SCALE)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--no-reset", dest="reset", action="store_false",

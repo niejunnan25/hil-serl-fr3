@@ -278,7 +278,17 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
     try:
         fk = CorrectFK()
         s0 = get_state(session, server, timeout=CTRL_T)
-        gripper_closed = float(np.asarray(s0["gripper_pos"]).reshape(-1)[0]) < 0.04
+        # Reset the Franka gripper to a known OPEN state. The gripper server tracks
+        # its own binary open/closed flag that DESYNCS from the physical gripper (an
+        # open-after-grasp can silently no-op, leaving the flag wrong so every later
+        # open/close becomes a no-op — the "gripper stopped working" bug). /reset_gripper
+        # re-homes it open + resyncs, so the GELLO/Xbox gripper edges work reliably.
+        try:
+            session.post(server.rstrip("/") + "/reset_gripper", json={}, timeout=8.0)
+            time.sleep(2.0)
+        except Exception:
+            pass
+        gripper_closed = False  # reset_gripper leaves the gripper OPEN
 
         from gello.dynamixel.driver import DynamixelDriver
         gello_dev = DynamixelDriver(list(range(8)), port="/dev/ttyUSB0", baudrate=57600,

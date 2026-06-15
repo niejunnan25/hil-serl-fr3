@@ -97,8 +97,11 @@ def gripper_edge(axis7, is_closed, close_below, open_above):
 
 # GELLO axis-7 gripper thresholds (calibrated live 2026-06-13: released ~3.64,
 # squeezed ~2.54, midpoint ~3.09). Deadband around the midpoint.
-GRIPPER_CLOSE_BELOW = 2.90
-GRIPPER_OPEN_ABOVE = 3.30
+# GELLO axis-7 gripper thresholds. Full range measured 2026-06-15:
+# squeezed ~2.50, released ~3.69, mid ~3.09. Deadband [3.0, 3.2] (hysteresis)
+# triggers on a moderate squeeze/release (no need to fully bottom out).
+GRIPPER_CLOSE_BELOW = 3.00
+GRIPPER_OPEN_ABOVE = 3.20
 
 
 def gello_twist(dq_gello, joint_signs, leader_scale, jacobian):
