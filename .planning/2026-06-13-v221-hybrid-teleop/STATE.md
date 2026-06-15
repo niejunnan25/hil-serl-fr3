@@ -20,10 +20,29 @@ GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy
 
 ```
 Phase A 遥操作工具链(软件)   ✅ CLOSED + A6 gap-closure ✅
-Phase B 真机验收             🟡 已规划(PLAN-B1..B4) | B1a(/pose 跟随软件) ✅ | B2a(Xbox 标定软件) ✅ | B1b/B2b/B3/B4 待真机
-Phase C Stage-1 纯插入训成   ⏳ (依赖 B)
+Phase B 真机验收             🟡 B1a✅ B2a✅ | B1b(GELLO e2e)✅真机 | B2b(Xbox e2e)✅真机 | B3 切换/B4 实标 待
+Phase C Stage-1 纯插入训成   ⏳ (依赖 B + 夹爪 actuation + 录制器 + ZED obs)
 Phase D 完整过程端到端训成   ⏳ = 收官判据
 ```
+
+### 真机验证 ✅ 2026-06-13（B1b/B2b）
+两条 teleop 栈在真机 FR3 上验证通过（详见下"关键发现/修复"）：
+- **GELLO e2e** ✅：拨主臂→FR3 跟随，净~12mm，方向正确，force<2N
+- **Xbox e2e** ✅：左摇杆→X/Y(右→+X、前→−Y，顺手)、右摇杆→yaw、D-pad→pitch/roll、RB 死手；映射逐项实测
+- **核心方案 = relative-pose（绕开坏 FK）**：repo 内 DH FK 与 server O_T_EE 差~50cm，故不用 FK(joint_target)；改为每 tick 读真机 currpos(/getstate) + 笛卡尔增量 → POST /pose（Xbox 摇杆→增量；GELLO 关节增量→机器人 Jacobian→增量）。每步 3mm 限幅。代码：scripts/relative_teleop.py(+test_relative_teleop.py 6 tests)。
+
+### 关键发现/修复（真机集成踩的坑，已全部解决）
+1. **控制栈在 fr3-laptop**(172.16.0.1, RT 内核)，**robot FCI=172.16.0.2**；desktop(172.16.0.4)=actor，经有线访问 laptop:5000。用户口述的 .1/.2 与实际相反，以 laptop ip addr 为准。
+2. **断电上电默认 boot 非 RT 内核**→franka_control RealtimeException abort。已把 **GRUB 默认永久设为 5.9.1-rt20**(by entry-id)。
+3. franka_server 启动：需 `FR3_REAL_FRANKA_SERVER_APPROVAL` + start_impedance 传 `allow_motion:=true`(补丁，清理时还原、engage 时重打) + `PYTHONPATH=...serl_robot_infra`(否则 robot_servers import 失败) + `--gripper_type=Franka --robot_ip=172.16.0.2 --flask_url=0.0.0.0`；缺 scipy 已 pip --user 装。
+4. **desktop 代理劫持内网**：desktop 有 http_proxy(127.0.0.1:7890)，no_proxy 用 CIDR(172.16.0.0/12)不被 curl/requests 认 → :5000 被劫持。修：actor 用 `requests Session.trust_env=False`(relative_teleop 已内置)/ `--noproxy`。
+5. **Xbox(teleop_hub)两个 bug**：pygame 只 joystick.init() 没 pygame.init()→event pump 空操作→读不到输入(修:SDL dummy+pygame.init)；轴布局错位(修:右摇杆=轴3/4、扳机=轴2/5 remap、D-pad=hat0、View/Menu=6/7)。
+6. SSH：laptop 重置过 host key + 用户加了外置 WiFi(192.168.0.135，后断开)；现经 desktop 有线跳板 + 已装我的 pubkey 访问。
+
+### 到示教采集还差（纯软件可先做 + 一次真机录制）
+- **夹爪 actuation**：relative_teleop 现只驱动手臂；RT/LT→`/close_gripper`、`/open_gripper`(或 /move_gripper) 未接（抓插头必需）。
+- **录制器**：record_gello/hybrid_demos 现用坏 FK；需切到 relative 路径 + 记录 (state, action, ZED images, ts) → SERL pkl。
+- **ZED obs**：确认相机→图像进 demo（desktop ZED capture 已有 contract，需接入录制）。
 
 ### Phase A ✅（详见 evidence/phase-a-A6-gate.md）
 A0 基线回迁入库 / A1 TeleopDeviceHub+XboxIntervention / A2 GelloIntervention 改造+TeleopArbiter /
