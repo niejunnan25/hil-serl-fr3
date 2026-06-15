@@ -73,6 +73,26 @@ def apply_cartesian_delta(currpos, dxyz, drotvec, max_step):
     return nextpos, applied
 
 
+def gripper_edge(axis7, is_closed, close_below, open_above):
+    """Edge-triggered GELLO-gripper -> FR3-gripper command (no per-tick spam).
+
+    GELLO 8th axis: squeezed (low) -> close, released (high) -> open. The
+    deadband [close_below, open_above] (hysteresis) prevents chatter near the
+    threshold. Returns (cmd, is_closed) where cmd is "close"/"open"/None.
+    """
+    if (not is_closed) and axis7 < close_below:
+        return "close", True
+    if is_closed and axis7 > open_above:
+        return "open", False
+    return None, is_closed
+
+
+# GELLO axis-7 gripper thresholds (calibrated live 2026-06-13: released ~3.64,
+# squeezed ~2.54, midpoint ~3.09). Deadband around the midpoint.
+GRIPPER_CLOSE_BELOW = 2.90
+GRIPPER_OPEN_ABOVE = 3.30
+
+
 def gello_twist(dq_gello, joint_signs, leader_scale, jacobian):
     """Map a GELLO joint delta to a Cartesian twist via the robot Jacobian.
 
@@ -105,10 +125,17 @@ def post_pose(session, url, pose7, timeout=5.0):
     r.raise_for_status()
 
 
+def post_gripper(session, url, cmd, timeout=5.0):
+    """cmd in {"close","open"} -> POST /close_gripper or /open_gripper."""
+    route = "/close_gripper" if cmd == "close" else "/open_gripper"
+    r = session.post(url.rstrip("/") + route, json={}, timeout=timeout)
+    r.raise_for_status()
+
+
 # ---------------------------------------------------------------------------
 # Live loop (dry-run validated before motion)
 # ---------------------------------------------------------------------------
-def run(device, server, hz, duration, dry_run, max_step, pos_scale, rpy_scale, leader_scale):
+def run(device, server, hz, duration, dry_run, max_step, pos_scale, rpy_scale, leader_scale, gripper=True):
     session = _session()
     state = get_state(session, server)
     currpos = np.asarray(state["pose"], dtype=float)
@@ -148,10 +175,13 @@ def run(device, server, hz, duration, dry_run, max_step, pos_scale, rpy_scale, l
     end = time.monotonic() + duration
     tick = 0
     posted = 0
+    gripper_closed = False        # GELLO gripper edge-trigger state (assume open at start)
+    gripper_events = 0
     try:
         while time.monotonic() < end:
             state = get_state(session, server)
             currpos = np.asarray(state["pose"], dtype=float)
+            gcmd = None
 
             if device == "xbox":
                 st = xbox.hub.poll()
@@ -167,22 +197,29 @@ def run(device, server, hz, duration, dry_run, max_step, pos_scale, rpy_scale, l
                 prev_gello = raw
                 J = np.asarray(state["jacobian"], dtype=float)
                 dxyz, drotvec = gello_twist(dq, DEFAULT_JOINT_SIGNS, leader_scale, J)
+                if gripper:
+                    gcmd, gripper_closed = gripper_edge(
+                        float(raw[7]), gripper_closed, GRIPPER_CLOSE_BELOW, GRIPPER_OPEN_ABOVE)
 
             nextpos, step = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
             if dry_run:
-                if step > 1e-6 or np.linalg.norm(drotvec) > 1e-6:
+                if step > 1e-6 or np.linalg.norm(drotvec) > 1e-6 or gcmd:
                     print(f"[DRY t={tick}] step={step*1000:.2f}mm "
-                          f"dxyz={np.round(dxyz,4).tolist()} -> next={np.round(nextpos[:3],4).tolist()}")
+                          f"dxyz={np.round(dxyz,4).tolist()}"
+                          + (f"  GRIPPER->{gcmd}" if gcmd else ""))
             else:
                 post_pose(session, server, nextpos)
                 posted += 1
+                if gcmd:
+                    post_gripper(session, server, gcmd); gripper_events += 1
+                    print(f"[GRIPPER t={tick}] -> {gcmd}")
             tick += 1
             time.sleep(dt)
     finally:
         if gello_dev is not None:
             try: gello_dev.close()
             except Exception: pass
-    print(f"[done] ticks={tick} posted={posted} (dry_run={dry_run})")
+    print(f"[done] ticks={tick} posted={posted} gripper_events={gripper_events} (dry_run={dry_run})")
     return 0
 
 
@@ -197,9 +234,11 @@ def main(argv=None):
     p.add_argument("--pos-scale", type=float, default=DEFAULT_POS_SCALE)
     p.add_argument("--rpy-scale", type=float, default=DEFAULT_RPY_SCALE)
     p.add_argument("--leader-scale", type=float, default=DEFAULT_LEADER_SCALE)
+    p.add_argument("--no-gripper", dest="gripper", action="store_false",
+                   help="(gello) disable GELLO axis-7 -> FR3 gripper actuation")
     a = p.parse_args(argv)
     return run(a.device, a.server, a.hz, a.duration, a.dry_run,
-               a.max_step, a.pos_scale, a.rpy_scale, a.leader_scale)
+               a.max_step, a.pos_scale, a.rpy_scale, a.leader_scale, gripper=a.gripper)
 
 
 if __name__ == "__main__":

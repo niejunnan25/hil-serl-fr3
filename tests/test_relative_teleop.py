@@ -88,3 +88,32 @@ class TestGelloTwist:
         dxyz, _ = gello_twist(dq_gello, signs, leader_scale=0.5, jacobian=J)
         # dq_fr3[3] = 0.1 * -1 * 0.5 = -0.05 -> y = -0.05
         assert dxyz[1] == pytest.approx(-0.05)
+
+
+class TestGripperEdge:
+    """GELLO axis-7 -> edge-triggered FR3 gripper open/close (no per-tick spam)."""
+
+    def test_closes_when_squeezed_below_threshold(self):
+        from relative_teleop import gripper_edge
+        cmd, closed = gripper_edge(2.5, is_closed=False, close_below=2.9, open_above=3.3)
+        assert cmd == "close" and closed is True
+
+    def test_opens_when_released_above_threshold(self):
+        from relative_teleop import gripper_edge
+        cmd, closed = gripper_edge(3.5, is_closed=True, close_below=2.9, open_above=3.3)
+        assert cmd == "open" and closed is False
+
+    def test_no_command_inside_deadband(self):
+        from relative_teleop import gripper_edge
+        cmd, closed = gripper_edge(3.05, is_closed=False, close_below=2.9, open_above=3.3)
+        assert cmd is None and closed is False
+
+    def test_no_repeat_when_already_closed(self):
+        from relative_teleop import gripper_edge
+        cmd, closed = gripper_edge(2.5, is_closed=True, close_below=2.9, open_above=3.3)
+        assert cmd is None and closed is True
+
+    def test_no_repeat_when_already_open(self):
+        from relative_teleop import gripper_edge
+        cmd, closed = gripper_edge(3.5, is_closed=False, close_below=2.9, open_above=3.3)
+        assert cmd is None and closed is False
