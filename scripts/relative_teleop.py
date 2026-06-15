@@ -37,6 +37,7 @@ if SCRIPT_DIR not in sys.path:
 
 # Defaults mirror gello_pose_follow / upstream usb_pickup_insertion.
 DEFAULT_MAX_STEP = 0.003          # m, per-tick Cartesian translation cap
+DEFAULT_MAX_ROT_STEP = 0.1        # rad, per-tick Cartesian rotation cap (= ACTION_SCALE rot)
 DEFAULT_POS_SCALE = 0.1           # normalized -> m (Xbox)
 DEFAULT_RPY_SCALE = 0.2           # normalized -> rad (Xbox)
 DEFAULT_LEADER_SCALE = 0.50
@@ -46,12 +47,16 @@ DEFAULT_JOINT_SIGNS = np.array([1, -1, 1, 1, 1, -1, 1], dtype=float)
 # ---------------------------------------------------------------------------
 # Pure math (unit-tested)
 # ---------------------------------------------------------------------------
-def apply_cartesian_delta(currpos, dxyz, drotvec, max_step):
+def apply_cartesian_delta(currpos, dxyz, drotvec, max_step, max_rot_step=DEFAULT_MAX_ROT_STEP):
     """currpos (7: x,y,z,qx,qy,qz,qw scalar-last) + a Cartesian delta.
 
     Translation is clipped so ||dxyz|| <= max_step (direction preserved).
-    Orientation is left-composed: q_next = rotvec(drotvec) * q_curr.
-    Returns (nextpos7, applied_translation_norm).
+    Rotation is clipped so ||drotvec|| <= max_rot_step (axis preserved) — a real
+    GELLO yank / dropped tick / stale-prev startup can otherwise compose an
+    arbitrarily large orientation jump bounded only by the server-side clip.
+    Orientation is left-composed: q_next = rotvec(applied_drotvec) * q_curr.
+    Returns (nextpos7, applied_translation_norm, applied_drotvec3) — the APPLIED
+    (post-clamp) values, so the caller records exactly what was commanded.
     """
     currpos = np.asarray(currpos, dtype=float)
     dxyz = np.asarray(dxyz, dtype=float).copy()
@@ -62,15 +67,18 @@ def apply_cartesian_delta(currpos, dxyz, drotvec, max_step):
     else:
         applied = n
 
+    drotvec = np.asarray(drotvec, dtype=float).copy()
+    nr = float(np.linalg.norm(drotvec))
+    if nr > max_rot_step:
+        drotvec *= max_rot_step / nr
+
     nextpos = currpos.copy()
     nextpos[:3] = currpos[:3] + dxyz
-
-    drotvec = np.asarray(drotvec, dtype=float)
     if float(np.linalg.norm(drotvec)) > 0.0:
         from scipy.spatial.transform import Rotation as R
         q = (R.from_rotvec(drotvec) * R.from_quat(currpos[3:])).as_quat()  # scalar-last
         nextpos[3:] = q
-    return nextpos, applied
+    return nextpos, applied, drotvec
 
 
 def gripper_edge(axis7, is_closed, close_below, open_above):
@@ -201,7 +209,7 @@ def run(device, server, hz, duration, dry_run, max_step, pos_scale, rpy_scale, l
                     gcmd, gripper_closed = gripper_edge(
                         float(raw[7]), gripper_closed, GRIPPER_CLOSE_BELOW, GRIPPER_OPEN_ABOVE)
 
-            nextpos, step = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
+            nextpos, step, _arot = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
             if dry_run:
                 if step > 1e-6 or np.linalg.norm(drotvec) > 1e-6 or gcmd:
                     print(f"[DRY t={tick}] step={step*1000:.2f}mm "

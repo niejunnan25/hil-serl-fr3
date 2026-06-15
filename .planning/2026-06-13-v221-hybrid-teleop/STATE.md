@@ -39,10 +39,25 @@ Phase D 完整过程端到端训成   ⏳ = 收官判据
 5. **Xbox(teleop_hub)两个 bug**：pygame 只 joystick.init() 没 pygame.init()→event pump 空操作→读不到输入(修:SDL dummy+pygame.init)；轴布局错位(修:右摇杆=轴3/4、扳机=轴2/5 remap、D-pad=hat0、View/Menu=6/7)。
 6. SSH：laptop 重置过 host key + 用户加了外置 WiFi(192.168.0.135，后断开)；现经 desktop 有线跳板 + 已装我的 pubkey 访问。
 
-### 到示教采集还差（纯软件可先做 + 一次真机录制）
-- **夹爪 actuation**：relative_teleop 现只驱动手臂；RT/LT→`/close_gripper`、`/open_gripper`(或 /move_gripper) 未接（抓插头必需）。
-- **录制器**：record_gello/hybrid_demos 现用坏 FK；需切到 relative 路径 + 记录 (state, action, ZED images, ts) → SERL pkl。
-- **ZED obs**：确认相机→图像进 demo（desktop ZED capture 已有 contract，需接入录制）。
+### 示教采集前置已就绪 ✅ 2026-06-15（GELLO 全流程录制器）
+- **夹爪 actuation** ✅：relative_teleop gripper_edge + post_gripper（真机 5 次开合验证，提交 ad4d541）。
+- **录制器** ✅：`scripts/gello_demo_recorder.py`（relative GELLO 驱动 + 线程化双 ZED 抓帧 + 每 tick
+  state(25D)/action(7D)/两路图/原始全量/ts → SERL `.pkl` + 原始 `.npz`）。纯函数 TDD（obs_state/
+  normalize_action/image_to_obs/build_transitions/validate）；真机 dry-check 实测 10.2Hz/overruns=0、
+  validate PASS、npz 与 pkl 对齐。
+- **ZED obs** ✅：vendored `scripts/fr3_zed_capture.py`（外置 2i 36276705→side_policy/side_classifier、
+  腕 ZED-M 13132609→wrist_1）；**关键修复：fr3_zed_capture 的 channels="RGB" 实际返回 BGR（只丢 alpha
+  无 B/R 互换），录制器 image_to_obs 加 BGR→RGB（真机帧实证通道互换正确）**。
+- **ultracode 对抗 review（4 lens）→ 6C/9I/8m**：真问题全修并实证——旋转 drotvec 客户端钳制
+  (apply_cartesian_delta 加 max_rot_step=0.1 + 返回 applied drotvec，3 元返回)、action 用 applied
+  rotation、None 帧复用、每拍异常隔离 + 连续错误熔断、停机零增量重锚、信号处理器前置、控制超时 0.5s、
+  相机 close 先 join、npz 截齐。全量 272 passed。
+
+### 真机环境恢复（断电重启后，2026-06-15）
+- **desktop GPU 驱动**：断电后 boot 错内核（5.15-realtime，NVIDIA 580 只为 6.8.0-generic 构建）→ nvidia
+  模块加载不了 → ZED CUDA 失效。修：`/etc/default/grub.d/99-realtime.cfg` GRUB_FLAVOUR_ORDER 改 generic
+  + GRUB_DEFAULT 按 entry-id 指 6.8.0-111-generic + 重启 → RTX 5080 + 驱动 580.159.03 恢复。
+- **ZED USB 枚举**：重启后外置 2i 软件 USB reset 恢复；腕 ZED-M 视频接口缺失需**物理重插**(USB3 口)后枚举。
 
 ### Phase A ✅（详见 evidence/phase-a-A6-gate.md）
 A0 基线回迁入库 / A1 TeleopDeviceHub+XboxIntervention / A2 GelloIntervention 改造+TeleopArbiter /

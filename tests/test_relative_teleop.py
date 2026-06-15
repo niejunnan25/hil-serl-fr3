@@ -36,13 +36,17 @@ def _unit(q):
 
 
 class TestApplyCartesianDelta:
+    # apply_cartesian_delta now returns (nextpos, applied_trans_norm, applied_drotvec):
+    # translation clamped to max_step AND rotation clamped to max_rot_step, with the
+    # APPLIED (post-clamp) rotation returned so the caller records what was commanded.
     def test_zero_delta_is_noop(self):
-        nextpos, step = apply_cartesian_delta(CURR, np.zeros(3), np.zeros(3), max_step=0.003)
+        nextpos, step, arot = apply_cartesian_delta(CURR, np.zeros(3), np.zeros(3), max_step=0.003)
         np.testing.assert_allclose(nextpos, CURR, atol=1e-9)
         assert step == pytest.approx(0.0)
+        np.testing.assert_allclose(arot, np.zeros(3), atol=1e-12)
 
     def test_small_translation_added_exactly(self):
-        nextpos, step = apply_cartesian_delta(CURR, np.array([0.001, 0.0, -0.002]), np.zeros(3), max_step=0.003)
+        nextpos, step, _ = apply_cartesian_delta(CURR, np.array([0.001, 0.0, -0.002]), np.zeros(3), max_step=0.003)
         np.testing.assert_allclose(nextpos[:3], CURR[:3] + np.array([0.001, 0.0, -0.002]), atol=1e-9)
         assert _unit(nextpos[3:]) == pytest.approx(1.0, abs=1e-9)
         assert step == pytest.approx(np.linalg.norm([0.001, 0.0, -0.002]))
@@ -50,7 +54,7 @@ class TestApplyCartesianDelta:
     def test_over_max_translation_is_clipped_to_max_step(self):
         # 10 mm requested, cap 3 mm -> applied norm exactly 3 mm, direction kept.
         big = np.array([0.010, 0.0, 0.0])
-        nextpos, step = apply_cartesian_delta(CURR, big, np.zeros(3), max_step=0.003)
+        nextpos, step, _ = apply_cartesian_delta(CURR, big, np.zeros(3), max_step=0.003)
         applied = nextpos[:3] - CURR[:3]
         assert np.linalg.norm(applied) == pytest.approx(0.003, abs=1e-9)
         assert step == pytest.approx(0.003, abs=1e-9)
@@ -58,10 +62,30 @@ class TestApplyCartesianDelta:
         assert applied[0] > 0 and abs(applied[1]) < 1e-12 and abs(applied[2]) < 1e-12
 
     def test_rotation_keeps_unit_quaternion_and_rotates(self):
-        nextpos, _ = apply_cartesian_delta(CURR, np.zeros(3), np.array([0.0, 0.0, 0.05]), max_step=0.003)
+        nextpos, _, arot = apply_cartesian_delta(CURR, np.zeros(3), np.array([0.0, 0.0, 0.05]),
+                                                 max_step=0.003, max_rot_step=0.1)
         assert _unit(nextpos[3:]) == pytest.approx(1.0, abs=1e-9)
         # a nonzero rotvec must change the orientation
         assert not np.allclose(nextpos[3:], CURR[3:])
+        # under the cap -> applied rotation == requested
+        np.testing.assert_allclose(arot, [0.0, 0.0, 0.05], atol=1e-9)
+
+    def test_rotation_over_max_is_clamped_direction_kept(self):
+        # 1.2 rad requested about +z, cap 0.1 rad -> applied norm exactly 0.1, +z kept.
+        nextpos, _, arot = apply_cartesian_delta(CURR, np.zeros(3), np.array([0.0, 0.0, 1.2]),
+                                                 max_step=0.003, max_rot_step=0.1)
+        assert np.linalg.norm(arot) == pytest.approx(0.1, abs=1e-9)
+        assert arot[2] > 0 and abs(arot[0]) < 1e-12 and abs(arot[1]) < 1e-12
+        assert _unit(nextpos[3:]) == pytest.approx(1.0, abs=1e-9)
+        # the realized orientation matches the clamped (0.1 rad) rotation, not 1.2
+        from scipy.spatial.transform import Rotation as R
+        expected = (R.from_rotvec([0.0, 0.0, 0.1]) * R.from_quat(CURR[3:])).as_quat()
+        np.testing.assert_allclose(nextpos[3:], expected, atol=1e-9)
+
+    def test_rotation_under_max_unchanged(self):
+        _, _, arot = apply_cartesian_delta(CURR, np.zeros(3), np.array([0.02, 0.0, 0.0]),
+                                           max_step=0.003, max_rot_step=0.1)
+        np.testing.assert_allclose(arot, [0.02, 0.0, 0.0], atol=1e-9)
 
 
 class TestGelloTwist:
