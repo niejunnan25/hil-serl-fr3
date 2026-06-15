@@ -53,6 +53,23 @@ Phase D 完整过程端到端训成   ⏳ = 收官判据
   rotation、None 帧复用、每拍异常隔离 + 连续错误熔断、停机零增量重锚、信号处理器前置、控制超时 0.5s、
   相机 close 先 join、npz 截齐。全量 272 passed。
 
+### GELLO 跟随重做 = Route E（2026-06-15，取代速度积分）
+- **速度积分（relative_teleop/gello_demo_recorder gello_twist）真机失败**：摇动大、机器人仅 2.28cm、
+  3mm 限幅从未触发 → 用静止 Jacobian 映射有损。**已弃**。
+- **Route E（采用）= 关节空间锚定 + 正确 FK，跑现有 cartesian_impedance /pose**（同训练控制器/动作空间，
+  无 Polymetis、无切栈）。`scripts/hybrid_teleop.py`：
+  - `q_gello_est = q0_robot + (raw-raw0)·joint_signs·leader_scale` → `CorrectFK` → 期望 EE 位姿 → /pose。
+  - **CorrectFK = pinocchio(panda_link8) ∘ T_offset[z 0.1034m, Rz -45° = Franka hand F_T_EE]**；实测 vs
+    server O_T_EE = 0.13mm。pinocchio 已装 hilserl-fr3（清代理走清华镜像）。repo fk_converter 错 52cm，弃。
+  - **混合仲裁**：☰(Xbox Menu) 边沿切 GELLO↔XBOX；**Xbox 激活时 GELLO 完全失效**；切回 GELLO 重锚（无跳变）。
+  - 复用 ZED/contract 录制/限幅(3mm/0.1rad)/夹爪边沿。9 测试；全量 286 passed。
+- **真机验证 ✅ 2026-06-15**：手臂跟随 10.12cm/0.75mm 每拍（vs 速度积分 2.28cm/0.06mm）；夹爪 close+open
+  触发成功；10Hz/overruns=0/validate PASS。Xbox 段尚未真机走通（待用户用 teach.sh 采全流程）。
+- **用户自驱采集 CLI**：`scripts/teach.sh`（→ teach_session.py）。在 desktop 终端直接跑：连通检查 →
+  /jointreset 复位 HOME[0,0,0,-1.9,0,2,0]（自主运动，先 Enter 确认）→ 设备初始化 → "▶ 示教现在开始" →
+  操作(GELLO 抓取/☰ 切 Xbox 精插)→ Ctrl-C 停 → 问 成功/失败/丢弃 + 备注 → 标注入 demos/hybrid/index.jsonl。
+  起止信号在终端内，操作者直接掌控时机。
+
 ### 真机环境恢复（断电重启后，2026-06-15）
 - **desktop GPU 驱动**：断电后 boot 错内核（5.15-realtime，NVIDIA 580 只为 6.8.0-generic 构建）→ nvidia
   模块加载不了 → ZED CUDA 失效。修：`/etc/default/grub.d/99-realtime.cfg` GRUB_FLAVOUR_ORDER 改 generic

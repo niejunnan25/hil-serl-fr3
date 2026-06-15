@@ -139,6 +139,19 @@ def pose_delta(currpos, desired):
     return dxyz, dR.as_rotvec()
 
 
+def reset_to_home(session, url, timeout=120.0):
+    """Home the robot via franka_server /jointreset (server default home
+    [0,0,0,-1.9,0,2,0]). The server stops impedance, runs the joint controller
+    to the home config (~15-20s, BLOCKING), then RESTARTS impedance — so /pose
+    works again on return. The robot moves AUTONOMOUSLY: the caller MUST ensure
+    the workspace is clear and the operator is on the E-stop first.
+    """
+    base = url.rstrip("/")
+    r = session.post(base + "/jointreset", json={}, timeout=timeout)
+    r.raise_for_status()
+    time.sleep(1.0)  # let impedance settle before the first /pose
+
+
 # ---------------------------------------------------------------------------
 # Live hybrid recorder (validated on the robot; not unit-tested)
 # ---------------------------------------------------------------------------
@@ -168,6 +181,7 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
     posted = gripper_events = tick = overruns = 0
     last_currpos = None
     last_side = last_wrist = None
+    result = None
     CTRL_T = 0.5
 
     try:
@@ -339,9 +353,12 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
             pkl, npz = save_demo(out_dir, ts_str, transitions, raw_np)
             print(f"[SAVE] transitions={n} validate={'PASS' if ok else 'FAIL'}: {msg}", flush=True)
             print(f"[SAVE] pkl={pkl}\n[SAVE] npz={npz}", flush=True)
+            result = {"pkl": pkl, "npz": npz, "n_transitions": int(n),
+                      "elapsed_s": round(float(elapsed), 1), "validate_ok": bool(ok),
+                      "abort_reason": stop["reason"]}
         else:
             print("[SAVE] too few ticks; nothing saved.", flush=True)
-    return 0
+    return result
 
 
 def main(argv=None):
@@ -355,7 +372,8 @@ def main(argv=None):
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
-    return run(a.server, a.hz, a.duration, a.out_dir, a.max_step, a.leader_scale, a.fps, a.dry_run)
+    res = run(a.server, a.hz, a.duration, a.out_dir, a.max_step, a.leader_scale, a.fps, a.dry_run)
+    return 0 if res is not None or a.dry_run else 1
 
 
 if __name__ == "__main__":
