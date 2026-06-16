@@ -113,16 +113,17 @@ A6 修复 review 的 2 critical+7 important，全量 225 passed。
 2. **franka_server / 控制栈待重起（R3 RED）**：laptop:5000 `/getstate` 返回 http_code=000（DOWN），laptop ping UP。
    整栈(roscore/impedance/franka_control/franka_server)须在 laptop 上由操作者(重)起 = OPERATOR step。
    验证可用的全栈重启程序见 `HANDOFF-2026-06-16.md` + `RUNBOOK-phaseC-online-training.md` §2。
-3. **actor↔learner 10.192.4.249:50051 待验（R5 AMBER）**：learner 监听 0.0.0.0:50051；从 desktop 看
-   10.192.4.249:50051 与 162.105.195.74:50051 当前均 CLOSED/不可达 → actor 起前必须先验 desktop↔zktitan tailscale + 50051 连通。
+3. ~~actor↔learner 50051 待验~~ ✅ 已解决（2026-06-16）：真实端口是 5588/5589（agentlace port_number+broadcast_port），
+   desktop→zktitan 162.105.195.74:5588+5589 实测 OPEN。匹配 actor = `_run_actor.py --ip 162.105.195.74`；
+   run_actor.sh 的 10.192.4.249:50051 是陈旧死路、勿用。
 4. Desk System Image actual 未记录（需 Desk UI 读 = 操作者）。
 5. 真机 motion 默认 blocked + 显式 approval 环境变量 + 用户现场 + E-stop 就位；max_step 任何路径不可绕过
    （communication_test 曾误动 FR3）。
 6. **learner 复用 vs 重起待决策**：zktitan pid 3417680(bash)/3417682(python) 已跑 1h51m，RLPD + 23 条
    gello_demo_20260615_*_success.pkl demo buffer（非 BC 预训练）；复用现 learner 还是重起，待定。
-7. **demo buffer 与 classifier 相机一致性待核（见 CHECKLIST-cd-pipeline-alignment.md）**：23 条 demo 的
-   action 尺度/夹爪符号/FK/旋转/obs schema 未对 live 复核（离线转换器 0.1/0.2 ≠ live 0.015/0.1）；
-   且 live `classifier_keys=[wrist_1]` 与 DECISION 文档 `[side_classifier]` 分歧，ckpt 训练相机待确认。
+7. ~~demo buffer 与 classifier 相机一致性待核~~ ✅ 已解决（2026-06-16）：demo 已核为 SERL 格式 / 25D tcp obs /
+   [-1,1] action / ±1 gripper（无 8D-joint/反号/~50cm-FK 污染）；classifier 实测仅侧相机可分（side_classifier
+   sep +0.810 / wrist_1 +0.007），已把 config classifier_keys `[wrist_1]→[side_classifier]`（含备份）。详见 CHECKLIST。
 
 ## Phase C 就绪门 (2026-06-16 只读核验)
 2026-06-16 ~14:00 CST 零运动只读探测（经 desktop 跳板，未写远端、未动机器人）。就绪表：
@@ -136,10 +137,10 @@ A6 修复 review 的 2 critical+7 important，全量 225 passed。
 | GPU | 🟢 GREEN | GPU5 RTX PRO 6000=learner(9GB/41%)；GPU2 vLLM(90GB) 勿动 |
 | Config | 🟢 GREEN | experiments/plug_insertion/config.py(2026-06-16 标定，live) |
 | Classifier ckpt | 🟢 GREEN | classifier_ckpt/reward_classifier.pt(44MB) 存在、在线可用 |
-| Classifier 训练相机 | 🟠 AMBER | live classifier_keys=[wrist_1] vs DECISION [side_classifier]，ckpt 训练相机待确认 |
-| Demo buffer (23 *_success.pkl) | 🟠 AMBER | 已被 learner 加载，但 action/夹爪/FK/旋转/obs 是否对齐 live 未复核（CHECKLIST #8） |
-| franka_server | 🔴 RED | laptop:5000 DOWN（待整栈重起）|
-| actor↔learner comms | 🟠 AMBER | desktop→10.192.4.249:50051 当前不可达，待验 |
+| Classifier 训练相机 | 🟢 已修 | 实测分类器仅侧相机可分(side_classifier sep +0.810 / wrist_1 +0.007 失明);config.py:266 classifier_keys 已 [wrist_1]→[side_classifier](备份 .bak_classifierkeys_20260616 + py_compile OK) |
+| Demo buffer (30 *_success.pkl) | 🟢 已核 | desktop 源副本:SERL 格式、obs=25D tcp + side_policy/wrist_1/side_classifier 图、action∈[-1,1]、gripper∈{-1,+1};无 8D-joint/反号/~50cm-FK 污染 |
+| franka_server | 🔴 RED | laptop:5000 DOWN（待整栈重起,见 RUNBOOK §2）|
+| actor↔learner comms | 🟢 | desktop→zktitan 162.105.195.74:5588+5589 实测 OPEN(agentlace,非 50051);actor=_run_actor.py --ip 162.105.195.74(非 run_actor.sh) |
 | Desk System Image | ⚪ unknown | 需 Desk UI 读 = 操作者 |
 
 详见 `RUNBOOK-phaseC-online-training.md` 与 `evidence/phaseC-readiness-20260616/`。
@@ -161,11 +162,12 @@ ACTION_SCALE/safety box/gripper。
 - 2026-06-13: **拆分 v2.2.1 / v2.1.1 STATE**（本文件为 v2.2.1 权威）
 
 ## Next Step（Phase C 开训剩余门，2026-06-16 更新）
-操作者已 reset go_home 复位（机器人安全、绿灯）。剩余开训门（全部归操作者，含 motion）：
+操作者已 reset go_home 复位（机器人安全、绿灯）。数据/通信/分类器修复已完成（见就绪门）。**唯一剩余阻塞 = 控制栈重起**：
 - (a) **重起控制栈 / franka_server**（laptop；整栈自起 roscore+impedance；PYTHONPATH 含 serl_robot_infra；
-  sleep ~34s；勿用 restart_imp.sh；勿 spam rosservice）— 程序见 HANDOFF-2026-06-16 + RUNBOOK §2。
-- (b) **验 desktop↔zktitan:50051 tailscale 连通**（LEARNER_IP=10.192.4.249:50051，当前 CLOSED）。
-- (c) **起 actor**：`scripts/run_actor.sh`（`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + franka_server up + 手柄）
-  + 开局按住 RB 引导插几次给随机策略喂种子。
-- (并行非阻塞) 核 CHECKLIST #8/#6（demo buffer 与 classifier 相机一致性）。
+  sleep ~34s；勿用 restart_imp.sh；勿 spam rosservice）— 程序见 HANDOFF-2026-06-16 + RUNBOOK §2。motion-相邻，需操作者在场。
+- (b) ✅ 通信已通（zktitan 5588/5589 OPEN）。
+- (c) **起 actor**：`python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 --checkpoint_path=...`
+  （`source env/activation.sh` + `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + §2 franka_server up + 手柄）
+  + 开局按住 RB 引导插几次喂种子。**不要用 run_actor.sh**。
+- (d) ✅ demo/classifier 一致性已核并修（classifier_keys→side_classifier）。
 详细步骤见 `RUNBOOK-phaseC-online-training.md`。

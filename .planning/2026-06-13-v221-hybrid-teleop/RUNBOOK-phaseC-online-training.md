@@ -16,12 +16,12 @@
 | desktop 残留 actor/python 进程 | 🟢 | 无,环境干净 |
 | Xbox 手柄 | 🟢 | /dev/input/js0 在位 + lsusb 045e:0b12 Microsoft Xbox Wireless Controller (model 1914),RB 可用(STATE.md "no /dev/input/js*" 阻塞为 STALE) |
 | learner (zktitan GPU5) | 🟢 | RUNNING,pid 3417680(bash)/3417682(python),user fzt,ELAPSED 1h51m,exp_name=plug_insertion,23 条 *_success.pkl demo buffer,RLPD(非 BC) |
-| reward classifier checkpoint | 🟢 | classifier_ckpt/reward_classifier.pt(44MB,6/15 21:16)+ checkpoint_100 + training_history.json,PyTorch 路径加载;ckpt 存在、在线可用 |
-| classifier 训练相机 | 🟠 | live classifier_keys=[wrist_1] 与 v2.2.1 DECISION 文档 [side_classifier] 分歧;ckpt 实际训练相机=待确认(查 training_history.json)。不阻塞启动,影响 reward 正确性 |
-| demo buffer (23 *_success.pkl) | 🟠 | learner 已加载,但 action 尺度/夹爪符号/FK/旋转/obs schema 是否对齐 live 未复核(见 CHECKLIST #8);离线转换器默认 0.1/0.2 ≠ live 0.015/0.1。影响 buffer 质量,不阻塞 actor 启动 |
-| live training config | 🟢 | experiments/plug_insertion/config.py(2026-06-16 已标定);plug_zed_insertion/config.py 是 4 行 stub,非 live |
-| franka_server :5000 (laptop) | 🔴 | DOWN,curl -X POST http://172.16.0.1:5000/getstate → http_code=000;laptop ping UP。控制栈必须由操作员在 laptop 重起 |
-| actor↔learner comms (50051) | 🟠 | learner listen 0.0.0.0:50051;从 desktop 看 10.192.4.249:50051 与 162.105.195.74:50051 均 CLOSED/不可达;actor 启动前必须先打通 tailscale + 50051 |
+| reward classifier checkpoint | 🟢 | classifier_ckpt/checkpoint_100/(JAX/Orbax,首选)+ reward_classifier.pt(PyTorch 回退);actor env hilserl-fr3 有 jax 0.6.2、无 torch → 走 JAX 路径加载 |
+| classifier 训练相机 | 🟢 已修 | 实测分类器仅侧相机可分(side_classifier sep +0.810 / wrist_1 sep +0.007=失明);已把 config.py:266 `classifier_keys` 由 `[wrist_1]` 改为 `[side_classifier]`(备份 config.py.bak_classifierkeys_20260616,py_compile OK) |
+| demo buffer (30 *_success.pkl) | 🟢 | 已核 desktop 源副本:SERL transition 格式、obs=25D tcp state + side_policy/wrist_1/side_classifier 图、action∈[-1,1]、gripper∈{-1,+1}(SERL 约定)。无 8D-joint/夹爪反号/~50cm-FK 污染 |
+| live training config | 🟢 | experiments/plug_insertion/config.py(2026-06-16 标定 + 本次 classifier_keys 修复);plug_zed_insertion/config.py 是 4 行 stub,非 live |
+| franka_server :5000 (laptop) | 🔴 | DOWN,curl -X POST http://172.16.0.1:5000/getstate → http_code=000;laptop ping UP。控制栈必须由操作员在 laptop 重起(见 §2) |
+| actor↔learner comms | 🟢 | 实测 desktop→zktitan 162.105.195.74:**5588+5589 OPEN**(agentlace port_number+broadcast_port,非 50051)。运行中 learner=`_run_learner.py`;匹配 actor=`_run_actor.py --ip 162.105.195.74`(见 §3/§4) |
 | Desk System Image | 🟠 | UNKNOWN,需 Desk UI 人工核验(操作员) |
 
 ---
@@ -81,44 +81,45 @@ curl -s -m6 -X POST http://172.16.0.1:5000/getstate
 
 ---
 
-## 3. 验 actor↔learner 通信 [你 / 可只读诊断]
+## 3. actor↔learner 通信 [已核验 GREEN]
 
-learner 已在 zktitan GPU5 运行(pid 3417680,23 条 demo,listen 0.0.0.0:50051)。Actor 端 LEARNER_IP=10.192.4.249:50051(tailscale)。当前从 desktop 看 50051 **CLOSED**,actor 启动前必须打通。
+运行中 learner = `_run_learner.py`(zktitan,user fzt,pid 3417680/3417682,GPU5,已跑 1h51m),agentlace 监听 **0.0.0.0:5588(port_number)+ 5589(broadcast_port)**(make_trainer_config 端口,**非** 50051)。
 
-[desktop, 只读诊断] 验 zktitan 50051 可达 + tailscale 在线:
+[desktop, 只读诊断] 已实测 desktop→zktitan 公网端口可达:
 
 ```bash
-nc -vz 10.192.4.249 50051
-tailscale status | grep 10.192.4.249   # tailscale 节点显示名以实际为准
+for p in 5588 5589; do timeout 5 bash -c "echo > /dev/tcp/162.105.195.74/$p" && echo "$p OPEN" || echo "$p closed"; done
 ```
 
-- 期望:`nc` 报 50051 open;`tailscale status` 显示 zktitan(10.192.4.249)在线。
-- 当前实测:50051 **CLOSED**。若仍 CLOSED,需修 tailscale / 防火墙——这是 **远端改动 = 你的判断和操作**(放行 zktitan 上 50051,或修复 desktop↔zktitan tailscale 链路)。
+- 实测:**5588 OPEN / 5589 OPEN** → 直接走公网 IP `162.105.195.74`,**无需 tailscale、无需 SSH 隧道**。
+- 坑:`scripts/run_actor.sh` 配的是陈旧死路(`LEARNER_IP=10.192.4.249:50051`,desktop 不可达,且是另一套 ActorServer 实现,与运行中的 `_run_learner.py` 不配对)。**不要用 run_actor.sh**;匹配 actor 见 §4(`_run_actor.py --ip 162.105.195.74`)。
 
-reuse vs restart learner 决策:
-
-- **优先 reuse** 现有 learner(pid 3417680,已有 23 条 demo buffer,ELAPSED 1h51m)。只要 50051 打通即可直接接 actor,不要无谓重起。
-- 仅当 learner 进程已死 / checkpoint 路径异常 / 必须换配置时才 restart。
-- restart 路径(zktitan,user fzt):`run_learner.sh`(LEARNER_IP=0.0.0.0:50051,ACTOR_IP=10.192.4.136,可带 `--resume_from N`)。
-- 注意:zktitan GPU2 vLLM(pid 2278578,90GB)**绝对不要碰**;只 kill 自己的进程;idle 数据从 /nvme 迁 /ssd。
+reuse vs restart learner:
+- **优先 reuse** 现 learner(已有 23 条 demo buffer,checkpoint_path=`/nvme/fzt/hilserl-deploy/ckpt`)。直接接 actor 即可。
+- 仅当 learner 已死 / checkpoint 异常 / 换配置时才重起。zktitan **GPU2 vLLM(pid 2278578,90GB)绝对不要碰**;只 kill 自己进程。
 
 ---
 
 ## 4. 起 actor + 进入在线训练 [你, motion] — 真机步骤
 
-确认 §2 franka_server 活着、§3 50051 打通后,在 **desktop(actor 主机)** 起 actor。experiment=plug_insertion,RLPD,classifier 默认开,无 BC。
+确认 §2 franka_server 活着、§3 通信(5588/5589)就绪后,在 **desktop(actor 主机)** 起 actor。**必须用 `_run_actor.py`(匹配运行中的 `_run_learner.py`),不要用 `run_actor.sh`(陈旧死路 10.192.4.249:50051)。** experiment=plug_insertion,RLPD,classifier 默认开,无 BC。
 
 [desktop, 真机] 起 actor:
 
 ```bash
-source env/activation.sh
-export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
-scripts/run_actor.sh
+cd /home/robot/serl_projects/hil-serl-fr3
+source env/activation.sh                       # conda hilserl-fr3 + PYTHONPATH + CUDA_ROOT(JAX)
+export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1   # 后台手柄事件(RB 死手必需)
+python _run_actor.py --exp_name=plug_insertion --actor \
+  --ip=162.105.195.74 \
+  --checkpoint_path=<本机 actor ckpt 目录(与上一轮/采集约定一致)> \
+  --seed=0
 ```
 
-- `run_actor.sh`:CONDA_ENV=hilserl-fr3,FRANKA_PORT=5000,LEARNER_IP=10.192.4.249,LEARNER_PORT=50051,EXPERIMENT=plug_insertion == `python -m experiments.plug_insertion.run_actor`。
-- 依赖:`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + franka_server up + 手柄在位。
-- classifier 默认 True;`--classifier` 默认开,无需额外参数。
+- `--ip=162.105.195.74` = learner 公网 IP(agentlace 5588/5589,已实测可达)。**不要**用 run_actor.sh / 10.192.4.249:50051。
+- 依赖:`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + §2 franka_server up + 手柄在位(已 GREEN)。
+- classifier 默认开;reward classifier 走 JAX/Orbax(checkpoint_100)路径(actor env 有 jax 无 torch);**classifier_keys 已修为 side_classifier**(见 §0)。
+- checkpoint_path = actor 本机 buffer/ckpt 目录;learner 自己的 ckpt 在 zktitan `/nvme/fzt/hilserl-deploy/ckpt`。
 - env 包装栈(顺序):FrankaEnv(fake_env) → HoldGripperWrapper → [if not fake_env] XboxIntervention → RelativeFrame → Quat2EulerWrapper → SERLObsWrapper(proprio_keys) → ChunkingWrapper(obs_horizon=1, act_exec_horizon=None) → [if classifier] MultiCameraBinaryRewardClassifierWrapper(reward_func) → GripperPenaltyWrapper(penalty=-0.02)。真机 actor fake_env=False(含 XboxIntervention);learner 端 fake_env=True(不连真机、无 Xbox)。GelloIntervention 已 import 但 Phase C **不启用**(Xbox-only)。
 
 ---

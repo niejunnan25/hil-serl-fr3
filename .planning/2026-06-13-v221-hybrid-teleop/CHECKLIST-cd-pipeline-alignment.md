@@ -34,7 +34,21 @@ Desk UI）；远端写入 = 需在 zktitan 上对 demo pkl / learner 状态做�
 | 7 | Reward gate（奖励门控） | live（2026-06-16 标定）：`relz = obs["state"][2]`（RelativeFrame z vs `RESET_POSE`）；`cls = sigmoid(classifier_fn(obs))[0]`；`reward = int((cls>0.7) and (relz < -0.05))`。旧 placeholder `<0.22` 在 signed rel-z 上每步触发（no-op bug），现已修复。 | 🟢 已标定（2026-06-16） | `config.py` 搜 reward / `reward_func`，确认门控为 `(cls>0.7) and (relz < -0.05)`，且 `relz` 取 `obs["state"][2]`（RelativeFrame vs `RESET_POSE`）。确认旧 `<0.22` 已不存在（grep 排除）。 | 我（只读核 config） |
 | 8 | Demo provenance（demo 来源与一致性） | 23 个 demo `/nvme/fzt/hilserl-deploy/serl19_insert/gello_demo_20260615_*_success.pkl` 正在喂运行中 learner（pid 3417682，RLPD demo buffer，非 BC 预训练）。 | 🟠 待核（覆盖 #1/#2/#3/#4/#5 全部约定） | 在 zktitan 对 23 个 `*_success.pkl` 一次性核验：(a) actions 尺度匹配 live `ACTION_SCALE`（#1）；(b) gripper 符号匹配 env 约定（#2）；(c) tcp_pose 用正确 FK、无 ~50cm 偏差（#3）；(d) 旋转表征与 env rotvec 一致（#4）；(e) obs 是 tcp 笛卡尔 schema、含 `side_policy`+`wrist_1`（#5）。任一不符则当前 demo buffer 已被污染，需重导后 `--resume_from` 重启 learner。 | 远端写入（zktitan 上读 pkl 复核 / 必要时重导） |
 
-## 结论
+## 2026-06-16 实测更新（只读核验 + 一处修复，覆盖上表判定）
+
+- **#1/#2/#5 demo 侧 → 🟢 已核**：核 desktop 源副本 `demos/hybrid/*success.pkl`(30 条)——SERL transition 格式，
+  obs = `state(25, tcp 空间)` + `side_policy/wrist_1/side_classifier`(3,128,128)，action ∈ [-1,1]，
+  gripper ∈ {-1,+1}(SERL 约定)。**无** 8D-joint / 夹爪反号 / ~50cm-FK 污染。demo buffer 可信。
+- **#3/#4 在线 RB 路径 → 🟢**：走 live env ACTION_SCALE + 正确 FK，本就一致(不经离线转换器)。
+- **#6 classifier 相机 → 🟢 已修(关键)**：实测分类器 success/failure 判别——`side_classifier sep +0.810`、
+  `side_policy +0.810`、**`wrist_1 +0.007`(失明)**。证明 ckpt 训练于侧相机、wrist_1 完全不可分。
+  已把 `experiments/plug_insertion/config.py:266` `classifier_keys` 由 `[wrist_1]` 改为 `[side_classifier]`
+  (备份 `.bak_classifierkeys_20260616`，py_compile OK)。**未修则 Phase C reward = 噪声、训练不收敛。**
+- **#7 reward gate → 🟢**（2026-06-16 已标定，未动）。
+- classifier 加载：actor env `hilserl-fr3` 有 jax 0.6.2、无 torch → 走 JAX/Orbax `checkpoint_100` 路径
+  （`.pt` 仅回退、本次离线核验用）；首次 actor 起动时确认 classifier 正常加载。
+
+## 结论（原始；🟠 项多数已被上节实测覆盖）
 
 阻塞可信在线训练（must-fix before trusting Phase C/D）：
 - #8 demo provenance —— 23 个 `*_success.pkl` 已进运行中 learner 的 demo buffer，但其 action 尺度 / gripper 符号 / FK / 旋转表征 / obs schema 均未对 live 约定复核；这是 #1–#5 在数据侧的总收口，未核前 buffer 可信度未知。
