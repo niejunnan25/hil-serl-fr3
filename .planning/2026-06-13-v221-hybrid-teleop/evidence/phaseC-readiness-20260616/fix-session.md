@@ -55,7 +55,18 @@ collect_classifier_images.py 默认 `camera_name="side_classifier"`，与上述�
     ② 预建空 ckpt 触发 `Press Enter to resume` 交互、detached EOFError → 改为不预建(路径不存在=fresh)。
 - **zktitan config classifier_keys 修复** ✅：`/nvme/fzt/hilserl-deploy/hil-serl-fr3/experiments/plug_insertion/config.py:265`
   `[wrist_1]→[side_classifier]`(备份 + py_compile OK)。learner 也加载 classifier(给 demo relabel)，故 desktop + zktitan 两侧都需修。
-- **actor 启动脚本** ✅ 新写：desktop `scripts/run_actor_phaseC.sh`（无现成正确脚本——run_actor.sh 是陈旧的
-  experiments/10.192.4.249:50051 路径，连不上当前 _run_learner.py）。新脚本内置 source activation +
-  SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 + `python _run_actor.py --actor --ip=162.105.195.74 --seed=0`，bash -n OK。
+- **actor 启动脚本** ✅ 新写：desktop `scripts/run_actor_phaseC.sh`（无现成正确脚本——run_actor.sh 陈旧:
+  experiments/10.192.4.249:50051，连不上当前 _run_learner.py）。内置 source activation +
+  SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 + 代理绕过 + `python _run_actor.py --actor --ip=162.105.195.74 --seed=0`。
+- **代理劫持修复(关键)** ✅：franka_env 用裸 requests 访问 http://172.16.0.1:5000(config SERVER_URL:128)，
+  desktop 有 http_proxy=127.0.0.1:7890 且 no_proxy 是 CIDR 172.16.0.0/12——**requests 不认 CIDR → 会被劫持**。
+  launcher 内 `export no_proxy=172.16.0.1,...` + `unset http_proxy...`。实测:修复后 requests POST /getstate → **200**。
+
+## 起飞前检查 (preflight 2026-06-16, 零 motion, 全 PASS)
+- franka_server: desktop→/getstate(noproxy) 200，机器人 q=[0,0,0,-1.57,0,1.57,0] 安全位、gripper 全开。
+- ZED 相机: ZED-M(2b03:f682) + ZED 2i(2b03:f880) 在线，/dev/video0..4。
+- actor HTTP: requests(代理绕过后) → franka_server 200；SERVER_URL=http://172.16.0.1:5000(非 localhost)。
+- learner: pid 3488693 活、5588/5589 listen、日志无 error(等 actor)。
+- comms: desktop→zktitan 5588/5589 OPEN；actor ckpt 不存在=fresh(不弹 resume 提示)。
+
 - **仍待(操作者，真机 motion)**：跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导插入。我不代为启动(需手在控制器 + E-stop)。

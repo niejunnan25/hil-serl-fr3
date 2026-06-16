@@ -123,7 +123,11 @@ python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 \
   --checkpoint_path=$PWD/artifacts/checkpoints/plug_insertion_phaseC_20260616 --seed=0
 ```
 
-注:`run_actor_phaseC.sh` 写在 desktop `scripts/`(训练仓库,非本 Mac .planning repo)。
+注:`run_actor_phaseC.sh` 写在 desktop `scripts/`(训练仓库,非本 Mac .planning repo)。已内置**代理绕过**
+(`no_proxy=172.16.0.1` 精确 IP + `unset http_proxy` —— franka_env 用裸 requests,desktop 的 CIDR no_proxy 不被 requests 认会被劫持)。
+
+**起飞前检查(2026-06-16 实测全 PASS)**:franka_server /getstate 200(机器人安全位) | ZED 双相机在线 |
+requests(代理绕过)→ franka_server 200 | learner 5588/5589 listen·无 error | actor ckpt fresh。**可启动。**
 
 - `--ip=162.105.195.74` = learner 公网 IP(agentlace 5588/5589,已实测可达)。**不要**用 run_actor.sh / 10.192.4.249:50051。
 - 依赖:`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + §2 franka_server up + 手柄在位(已 GREEN)。
