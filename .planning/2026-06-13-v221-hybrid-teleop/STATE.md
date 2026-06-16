@@ -10,6 +10,21 @@ v2.2.1 = FR3 真机插插头 HIL-SERL 的 real 机器人线（sim 线 = v2.1.1�
 GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy。两线 fork，日后并主线。
 设计决策见 `DECISIONS.md`；契约见 `B-RESEARCH.md`；review 见 `REVIEW-PhaseA.md`。
 
+## 两个 desktop 仓库（易混，职责对照）
+- `/home/robot/serl_projects/hil-serl-fr3`（**带连字符**）= HIL-SERL/SERL **训练/算法层**：`upstream/` vendored
+  hil-serl/serl/agentlace/serl_franka_controllers，跑 SAC actor(`_run_actor.py`)/learner + reward classifier。
+  Phase C/D 训练栈，actor 从这里起。README："isolated HIL-SERL/SERL env ... separate from DROID"。desktop-only。
+- `/home/robot/hilserl-fr3`（**无连字符**）= **遥操作/采数/控制层** = 你 Mac `Documents/Code/hilserl-fr3` 同一仓库（同步到 desktop）。
+  teleop 工具链(teach.sh/hybrid_teleop/relative_teleop/teleop_hub/xbox_intervention/…)+ demos(`demos/hybrid`, `serl19_insert`)。Phase A/B 工具链。
+- 数据流：B 采 demo → `demos/serl19_insert/*.pkl` → 拷 zktitan `/nvme/fzt/hilserl-deploy/serl19_insert/` → A 的 learner 加载；
+  A 的 `scripts/` 同步了 B 的 teleop 组件供训练时 RB 介入。命名巧合：A 随上游 `hil-serl`，B 是你的项目名 `hilserl-fr3`。
+
+## Xbox / GELLO 控制速查（real teleop）
+- **hybrid_teleop（teach.sh）默认 GELLO 模式**：朝向跟 GELLO 主臂(joint anchor+FK)，**无 Xbox yaw、会随主臂漂**。
+  **按 ☰ Menu(`start`)键切 XBOX 模式**（`hybrid_teleop.py:402 toggle=st.start`）→ 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、RT/LT=闭/开爪、**RB+A=直下插**；再按 ☰ 切回 GELLO(重锚)。
+- **actor（run_actor_phaseC.sh）XboxIntervention**：**按住 RB 接管** → 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、A(配RB)=直下插；松 RB 交还策略。开局在 RESET_POSE 朝向。
+  注：GELLO 模式没有 yaw 杆控（朝向来自主臂）是设计如此；要 Xbox 控 yaw 必须切到 XBOX 模式或用 actor 的 RB。
+
 ## 执行策略
 - grill/discuss/plan/review：Opus 最高 effort（Fable 5 已停用，见全局 model-stage-policy）。
 - execute：Opus 4.8 xhigh。安全关键改动做独立对抗式 review。
