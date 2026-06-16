@@ -20,10 +20,20 @@ GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy
 
 ```
 Phase A 遥操作工具链(软件)   ✅ CLOSED + A6 gap-closure ✅
-Phase B 真机验收             🟡 B1a✅ B2a✅ | B1b(GELLO e2e)✅真机 | B2b(Xbox e2e)✅真机 | B3 切换/B4 实标 待
-Phase C Stage-1 纯插入训成   ⏳ (依赖 B + 夹爪 actuation + 录制器 + ZED obs)
+Phase B 真机验收             🟡 B1a/B2a(软件)✅ | B1b(GELLO e2e)✅真机 | B2b(Xbox e2e)✅真机 | B3 切换/B4 实标 待
+Phase C Stage-1 纯插入训成   🟡 首次真机启动(2026-06-16)曾中途事故 → 操作者已 go_home 复位+绿灯恢复 → 现处「就绪门」阶段(franka_server 待重起 + actor↔learner 通信待验)
 Phase D 完整过程端到端训成   ⏳ = 收官判据
 ```
+
+## ⏩ 最新 handoff → `HANDOFF-2026-06-16.md`（新窗口接手先读这个）
+2026-06-16 进入 Phase C(insert-only Stage-1 在线训练)首次真机启动,中途机器人进入扭曲构型 + 红灯,
+做了一轮控制栈恢复。本会话敲定:
+- **机器人现安全(红灯已清/控制健康/仍夹插头)但姿态未复位**;下一步=笛卡尔 `reset_to_home`(你现场+E-stop)。
+- **/jointreset 真机死路二次确证**:补了 allow_motion 仍报 `Could not find resource fr3_joint1 in
+  PositionJointInterface`(接口冲突,= 第 72 行旧结论)。补丁已还原。复位只走笛卡尔。
+- **走官方在线 HIL-SERL(RLPD,不做 BC 预训练)**;随机开局靠**你按住 RB 从第一步引导**化解。
+- **接管逻辑**:按住 RB+拨杆=你开 / 松开=交还策略(详见 HANDOFF)。
+- franka_server 全栈重启程序(PYTHONPATH 修复)已验证,记在 HANDOFF;**勿用 restart_imp.sh**(破坏 self.imp)。
 
 ### 真机验证 ✅ 2026-06-13（B1b/B2b）
 两条 teleop 栈在真机 FR3 上验证通过（详见下"关键发现/修复"）：
@@ -98,11 +108,41 @@ A6 修复 review 的 2 critical+7 important，全量 225 passed。
 - **B1b / B2b / B3 / B4 真机**：见下"真机恢复条件"。
 
 ## Pending Blockers（真机门控）
-1. Xbox 手柄 USB 接入 fr3-desktop-ts（当前无 /dev/input/js*）— 物理动作
-2. 用户现场 + E-stop 就位 + 显式 approval 环境变量（FR3_GELLO/XBOX/HYBRID_E2E_APPROVAL）
-3. Desk System Image actual 未记录（需 Desk UI 读）
-4. 安全事件约定：communication_test 曾误动 FR3，motion wrapper 默认 blocked
-5. zktitan learner ✅ 已验证（6 GPU，经 fr3-desktop-ts 跳板）— C/D 训练端就绪
+1. ~~Xbox 手柄 USB 接入 fr3-desktop-ts（当前无 /dev/input/js*）~~ ✅ 已解决（2026-06-16 实证）：
+   /dev/input/js0 已存在 + lsusb 见 `045e:0b12 Microsoft Xbox Wireless Controller (model 1914)`，RB 可用。
+2. **franka_server / 控制栈待重起（R3 RED）**：laptop:5000 `/getstate` 返回 http_code=000（DOWN），laptop ping UP。
+   整栈(roscore/impedance/franka_control/franka_server)须在 laptop 上由操作者(重)起 = OPERATOR step。
+   验证可用的全栈重启程序见 `HANDOFF-2026-06-16.md` + `RUNBOOK-phaseC-online-training.md` §2。
+3. **actor↔learner 10.192.4.249:50051 待验（R5 AMBER）**：learner 监听 0.0.0.0:50051；从 desktop 看
+   10.192.4.249:50051 与 162.105.195.74:50051 当前均 CLOSED/不可达 → actor 起前必须先验 desktop↔zktitan tailscale + 50051 连通。
+4. Desk System Image actual 未记录（需 Desk UI 读 = 操作者）。
+5. 真机 motion 默认 blocked + 显式 approval 环境变量 + 用户现场 + E-stop 就位；max_step 任何路径不可绕过
+   （communication_test 曾误动 FR3）。
+6. **learner 复用 vs 重起待决策**：zktitan pid 3417680(bash)/3417682(python) 已跑 1h51m，RLPD + 23 条
+   gello_demo_20260615_*_success.pkl demo buffer（非 BC 预训练）；复用现 learner 还是重起，待定。
+7. **demo buffer 与 classifier 相机一致性待核（见 CHECKLIST-cd-pipeline-alignment.md）**：23 条 demo 的
+   action 尺度/夹爪符号/FK/旋转/obs schema 未对 live 复核（离线转换器 0.1/0.2 ≠ live 0.015/0.1）；
+   且 live `classifier_keys=[wrist_1]` 与 DECISION 文档 `[side_classifier]` 分歧，ckpt 训练相机待确认。
+
+## Phase C 就绪门 (2026-06-16 只读核验)
+2026-06-16 ~14:00 CST 零运动只读探测（经 desktop 跳板，未写远端、未动机器人）。就绪表：
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| Robot | 🟢 GREEN | 操作者本会话已 reset go_home + 绿灯恢复 |
+| Desktop 残留进程 | 🟢 GREEN | 无 actor/python 残留(clean) |
+| Xbox controller | 🟢 GREEN | /dev/input/js0 + 045e:0b12，RB 可用 |
+| Learner | 🟢 GREEN | zktitan pid 3417682 RUNNING 1h51m，RLPD+23 demo |
+| GPU | 🟢 GREEN | GPU5 RTX PRO 6000=learner(9GB/41%)；GPU2 vLLM(90GB) 勿动 |
+| Config | 🟢 GREEN | experiments/plug_insertion/config.py(2026-06-16 标定，live) |
+| Classifier ckpt | 🟢 GREEN | classifier_ckpt/reward_classifier.pt(44MB) 存在、在线可用 |
+| Classifier 训练相机 | 🟠 AMBER | live classifier_keys=[wrist_1] vs DECISION [side_classifier]，ckpt 训练相机待确认 |
+| Demo buffer (23 *_success.pkl) | 🟠 AMBER | 已被 learner 加载，但 action/夹爪/FK/旋转/obs 是否对齐 live 未复核（CHECKLIST #8） |
+| franka_server | 🔴 RED | laptop:5000 DOWN（待整栈重起）|
+| actor↔learner comms | 🟠 AMBER | desktop→10.192.4.249:50051 当前不可达，待验 |
+| Desk System Image | ⚪ unknown | 需 Desk UI 读 = 操作者 |
+
+详见 `RUNBOOK-phaseC-online-training.md` 与 `evidence/phaseC-readiness-20260616/`。
 
 ## 真机恢复条件（B1b 起，待一次 motion session）
 B1b (GELLO e2e ramp: dry-run→no-op→micro→full + live 契约核对) → B2b (Xbox 实标) →
@@ -120,6 +160,12 @@ ACTION_SCALE/safety box/gripper。
   C2 解决；B1a 按 record_gello_demos_serl 真实契约实现（关节目标→FK→/pose），加 FK-bias 门
 - 2026-06-13: **拆分 v2.2.1 / v2.1.1 STATE**（本文件为 v2.2.1 权威）
 
-## Next Step（本会话）
-纯软件已基本见底：Phase A + A6 + B1a 完成，本轮 B2a。之后 v2.2.1 剩余全部硬件门控
-（B1b 起需真机 + 手柄 + 你现场 + E-stop；C/D 需数据采集）。
+## Next Step（Phase C 开训剩余门，2026-06-16 更新）
+操作者已 reset go_home 复位（机器人安全、绿灯）。剩余开训门（全部归操作者，含 motion）：
+- (a) **重起控制栈 / franka_server**（laptop；整栈自起 roscore+impedance；PYTHONPATH 含 serl_robot_infra；
+  sleep ~34s；勿用 restart_imp.sh；勿 spam rosservice）— 程序见 HANDOFF-2026-06-16 + RUNBOOK §2。
+- (b) **验 desktop↔zktitan:50051 tailscale 连通**（LEARNER_IP=10.192.4.249:50051，当前 CLOSED）。
+- (c) **起 actor**：`scripts/run_actor.sh`（`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + franka_server up + 手柄）
+  + 开局按住 RB 引导插几次给随机策略喂种子。
+- (并行非阻塞) 核 CHECKLIST #8/#6（demo buffer 与 classifier 相机一致性）。
+详细步骤见 `RUNBOOK-phaseC-online-training.md`。
