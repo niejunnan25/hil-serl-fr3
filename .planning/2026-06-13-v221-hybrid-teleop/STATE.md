@@ -22,7 +22,7 @@ GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy
 ## Xbox / GELLO 控制速查（real teleop）
 - **hybrid_teleop（teach.sh）默认 GELLO 模式**：朝向跟 GELLO 主臂(joint anchor+FK)，**无 Xbox yaw、会随主臂漂**。
   **按 ☰ Menu(`start`)键切 XBOX 模式**（`hybrid_teleop.py:402 toggle=st.start`）→ 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、RT/LT=闭/开爪、**RB+A=直下插**；再按 ☰ 切回 GELLO(重锚)。
-- **actor（run_actor_phaseC.sh）XboxIntervention**：**按住 RB 接管** → 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、A(配RB)=直下插；松 RB 交还策略。开局在 RESET_POSE 朝向。
+- **actor（run_actor_phaseC.sh）= Xbox-only 在线介入**(2026-06-16 应操作者要求确认):wrapper 栈只有 `XboxIntervention`,无 GelloIntervention/Arbiter;`config.py:29` 死 import 已注释。**按住 RB 接管** → 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、A(配RB)=直下插;松 RB 交还策略。开局在 RESET_POSE 朝向。
   注：GELLO 模式没有 yaw 杆控（朝向来自主臂）是设计如此；要 Xbox 控 yaw 必须切到 XBOX 模式或用 actor 的 RB。
 
 ## 执行策略
