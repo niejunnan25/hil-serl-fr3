@@ -104,17 +104,26 @@ reuse vs restart learner:
 
 确认 §2 franka_server 活着、§3 通信(5588/5589)就绪后,在 **desktop(actor 主机)** 起 actor。**必须用 `_run_actor.py`(匹配运行中的 `_run_learner.py`),不要用 `run_actor.sh`(陈旧死路 10.192.4.249:50051)。** experiment=plug_insertion,RLPD,classifier 默认开,无 BC。
 
-[desktop, 真机] 起 actor:
+[desktop, 真机] 起 actor —— 用已写好的启动脚本(推荐,内置正确入口/ip/env,免误用 stale run_actor.sh):
 
 ```bash
 cd /home/robot/serl_projects/hil-serl-fr3
-source env/activation.sh                       # conda hilserl-fr3 + PYTHONPATH + CUDA_ROOT(JAX)
-export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1   # 后台手柄事件(RB 死手必需)
-python _run_actor.py --exp_name=plug_insertion --actor \
-  --ip=162.105.195.74 \
-  --checkpoint_path=<本机 actor ckpt 目录(与上一轮/采集约定一致)> \
-  --seed=0
+scripts/run_actor_phaseC.sh           # = source activation + SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
+                                      #   + python _run_actor.py --actor --ip=162.105.195.74 --seed=0
+# 可覆盖 ckpt:  CKPT=/path/to/ckpt scripts/run_actor_phaseC.sh
 ```
+
+等价手敲命令(脚本内容):
+
+```bash
+cd /home/robot/serl_projects/hil-serl-fr3
+source env/activation.sh
+export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
+python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 \
+  --checkpoint_path=$PWD/artifacts/checkpoints/plug_insertion_phaseC_20260616 --seed=0
+```
+
+注:`run_actor_phaseC.sh` 写在 desktop `scripts/`(训练仓库,非本 Mac .planning repo)。
 
 - `--ip=162.105.195.74` = learner 公网 IP(agentlace 5588/5589,已实测可达)。**不要**用 run_actor.sh / 10.192.4.249:50051。
 - 依赖:`SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + §2 franka_server up + 手柄在位(已 GREEN)。

@@ -55,4 +55,7 @@ collect_classifier_images.py 默认 `camera_name="side_classifier"`，与上述�
     ② 预建空 ckpt 触发 `Press Enter to resume` 交互、detached EOFError → 改为不预建(路径不存在=fresh)。
 - **zktitan config classifier_keys 修复** ✅：`/nvme/fzt/hilserl-deploy/hil-serl-fr3/experiments/plug_insertion/config.py:265`
   `[wrist_1]→[side_classifier]`(备份 + py_compile OK)。learner 也加载 classifier(给 demo relabel)，故 desktop + zktitan 两侧都需修。
-- **仍待(操作者，真机 motion)**：起 actor(`_run_actor.py --ip 162.105.195.74`)+ RB 引导插入。我不代为启动(需手在控制器 + E-stop)。
+- **actor 启动脚本** ✅ 新写：desktop `scripts/run_actor_phaseC.sh`（无现成正确脚本——run_actor.sh 是陈旧的
+  experiments/10.192.4.249:50051 路径，连不上当前 _run_learner.py）。新脚本内置 source activation +
+  SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 + `python _run_actor.py --actor --ip=162.105.195.74 --seed=0`，bash -n OK。
+- **仍待(操作者，真机 motion)**：跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导插入。我不代为启动(需手在控制器 + E-stop)。
