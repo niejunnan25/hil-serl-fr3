@@ -44,5 +44,15 @@ collect_classifier_images.py 默认 `camera_name="side_classifier"`，与上述�
 - `_load_classifier_adaptive` 优先 JAX 路径（`load_classifier_func` + Orbax `checkpoint_100`）；`.pt`(torch) 仅回退。
 - 故 torch 缺失非阻塞；首次 actor 起动确认 classifier 加载即可。
 
-## 仍 RED（留操作者现场握手）
-- franka_server :5000 DOWN（http 000）。重起程序（HANDOFF 验证、sshpass 可用）见 RUNBOOK §2。motion-相邻，需在场 + E-stop。
+## 真机操作执行结果（操作者授权 + 在场 + E-stop 确认后）
+- **franka_server 全栈重起** ✅ 2026-06-16 14:50：经 desktop→laptop(sshpass) 执行 HANDOFF 程序，pid 135016，
+  Flask serving；desktop→/getstate(`--noproxy`) http 200(裸 curl 000 是 desktop 代理劫持，actor `trust_env=False` 不受影响)；
+  机器人 q=[0,0,0,-1.57,0,1.57,0] 安全位、j6 远离下限、gripper 全开、force 小、无 fault。
+- **learner fresh 重起** ✅ 2026-06-16 15:05：操作者选"从头重起"(因 90k 步零奖励 demo-only 空转)。
+  - venv = `/nvme/fzt/envs/hilserl-fr3`(pyvenv.cfg)，python abs-path 自洽含 jax 0.6.2 + CudaDevice@GPU5。
+  - 旧 ckpt(涨到 ~98k) → `ckpt_demoonly_bak_20260616`；新 step 0、demo buffer 9632、classifier(side_classifier) 加载 OK、5588/5589 listen。pid 3488693，CUDA_VISIBLE_DEVICES=5。
+  - 踩坑(已纠)：① /proc/exe 解析成系统 /usr/bin/python3.10(无 jax) → 必须用 venv 的 bin/python；
+    ② 预建空 ckpt 触发 `Press Enter to resume` 交互、detached EOFError → 改为不预建(路径不存在=fresh)。
+- **zktitan config classifier_keys 修复** ✅：`/nvme/fzt/hilserl-deploy/hil-serl-fr3/experiments/plug_insertion/config.py:265`
+  `[wrist_1]→[side_classifier]`(备份 + py_compile OK)。learner 也加载 classifier(给 demo relabel)，故 desktop + zktitan 两侧都需修。
+- **仍待(操作者，真机 motion)**：起 actor(`_run_actor.py --ip 162.105.195.74`)+ RB 引导插入。我不代为启动(需手在控制器 + E-stop)。

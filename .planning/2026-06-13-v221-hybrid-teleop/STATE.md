@@ -139,7 +139,8 @@ A6 修复 review 的 2 critical+7 important，全量 225 passed。
 | Classifier ckpt | 🟢 GREEN | classifier_ckpt/reward_classifier.pt(44MB) 存在、在线可用 |
 | Classifier 训练相机 | 🟢 已修 | 实测分类器仅侧相机可分(side_classifier sep +0.810 / wrist_1 +0.007 失明);config.py:266 classifier_keys 已 [wrist_1]→[side_classifier](备份 .bak_classifierkeys_20260616 + py_compile OK) |
 | Demo buffer (30 *_success.pkl) | 🟢 已核 | desktop 源副本:SERL 格式、obs=25D tcp + side_policy/wrist_1/side_classifier 图、action∈[-1,1]、gripper∈{-1,+1};无 8D-joint/反号/~50cm-FK 污染 |
-| franka_server | 🔴 RED | laptop:5000 DOWN（待整栈重起,见 RUNBOOK §2）|
+| franka_server | 🟢 | 2026-06-16 14:50 全栈重起(pid 135016),desktop→/getstate 200(--noproxy),机器人 q=[0,0,0,-1.57,0,1.57,0] 安全位、gripper 全开、无 fault |
+| learner (fresh) | 🟢 | 2026-06-16 15:05 fresh 重起 step 0(GPU5,demo buffer 9632,classifier=side_classifier,5588/5589 listen);旧 demo-only ckpt → ckpt_demoonly_bak_20260616 |
 | actor↔learner comms | 🟢 | desktop→zktitan 162.105.195.74:5588+5589 实测 OPEN(agentlace,非 50051);actor=_run_actor.py --ip 162.105.195.74(非 run_actor.sh) |
 | Desk System Image | ⚪ unknown | 需 Desk UI 读 = 操作者 |
 
@@ -162,12 +163,10 @@ ACTION_SCALE/safety box/gripper。
 - 2026-06-13: **拆分 v2.2.1 / v2.1.1 STATE**（本文件为 v2.2.1 权威）
 
 ## Next Step（Phase C 开训剩余门，2026-06-16 更新）
-操作者已 reset go_home 复位（机器人安全、绿灯）。数据/通信/分类器修复已完成（见就绪门）。**唯一剩余阻塞 = 控制栈重起**：
-- (a) **重起控制栈 / franka_server**（laptop；整栈自起 roscore+impedance；PYTHONPATH 含 serl_robot_infra；
-  sleep ~34s；勿用 restart_imp.sh；勿 spam rosservice）— 程序见 HANDOFF-2026-06-16 + RUNBOOK §2。motion-相邻，需操作者在场。
-- (b) ✅ 通信已通（zktitan 5588/5589 OPEN）。
-- (c) **起 actor**：`python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 --checkpoint_path=...`
-  （`source env/activation.sh` + `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1` + §2 franka_server up + 手柄）
-  + 开局按住 RB 引导插几次喂种子。**不要用 run_actor.sh**。
-- (d) ✅ demo/classifier 一致性已核并修（classifier_keys→side_classifier）。
-详细步骤见 `RUNBOOK-phaseC-online-training.md`。
+操作者已 reset go_home。franka_server / 通信 / 分类器 / demo / learner 全部就绪。**唯一剩余 = 操作者起 actor + RB 引导(真机 motion，你的手)**：
+- (a) ✅ franka_server 全栈重起完成(2026-06-16 14:50，pid 135016，/getstate 200，机器人安全位)。
+- (b) ✅ 通信已通(zktitan 5588/5589 OPEN，actor 走 --ip 162.105.195.74)。
+- (c) ✅ learner fresh 重起(step 0，GPU5，demo buffer 9632，classifier=side_classifier)；旧 90k demo-only ckpt → ckpt_demoonly_bak_20260616。
+- (d) ✅ demo/classifier 一致性已核并修(desktop + zktitan 两侧 classifier_keys→side_classifier)。
+- (e) **【操作者】起 actor + RB 引导**：`cd .../hil-serl-fr3 && source env/activation.sh && export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 && python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 --checkpoint_path=<本机> --seed=0`。开局按住 RB 插几次喂种子。**不要用 run_actor.sh**。
+完成判据：EVAL-01 = 松开 RB 下策略自主插入成功 ≥3 次。详细见 `RUNBOOK-phaseC-online-training.md`。
