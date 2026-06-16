@@ -168,5 +168,7 @@ ACTION_SCALE/safety box/gripper。
 - (b) ✅ 通信已通(zktitan 5588/5589 OPEN，actor 走 --ip 162.105.195.74)。
 - (c) ✅ learner fresh 重起(step 0，GPU5，demo buffer 9632，classifier=side_classifier)；旧 90k demo-only ckpt → ckpt_demoonly_bak_20260616。
 - (d) ✅ demo/classifier 一致性已核并修(desktop + zktitan 两侧 classifier_keys→side_classifier)。
-- (e) **【操作者】起 actor + RB 引导**：`cd .../hil-serl-fr3 && source env/activation.sh && export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 && python _run_actor.py --exp_name=plug_insertion --actor --ip=162.105.195.74 --checkpoint_path=<本机> --seed=0`。开局按住 RB 插几次喂种子。**不要用 run_actor.sh**。
+- (e) **【操作者】起 actor + RB 引导**：desktop 跑 `scripts/run_actor_phaseC.sh`(已内置 activation + 手柄 + 代理绕过 + 正确 --ip + `MANUAL_RESET=1`;**不要用 run_actor.sh**)。开局按住 RB 插几次喂种子。
+  - **episode 间手动复位**(应操作者要求,机械臂自主拔插头不可靠):每条 episode 结束后 actor 暂停等你按 Enter,你先协助拔插头再按键复位(`_run_actor.py:216` 前 MANUAL_RESET 门控)。actor 须前台跑。
+  - 起飞前检查(2026-06-16)全 PASS:franka_server 200 / ZED 双相机 / requests 绕代理 200 / learner 5588-5589 / ckpt fresh。
 完成判据：EVAL-01 = 松开 RB 下策略自主插入成功 ≥3 次。详细见 `RUNBOOK-phaseC-online-training.md`。

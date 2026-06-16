@@ -69,4 +69,9 @@ collect_classifier_images.py 默认 `camera_name="side_classifier"`，与上述�
 - learner: pid 3488693 活、5588/5589 listen、日志无 error(等 actor)。
 - comms: desktop→zktitan 5588/5589 OPEN；actor ckpt 不存在=fresh(不弹 resume 提示)。
 
-- **仍待(操作者，真机 motion)**：跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导插入。我不代为启动(需手在控制器 + E-stop)。
+- **episode 间手动复位门控** ✅(应操作者要求，因机械臂自主拔插头不可靠)：`_run_actor.py` 在 between-episode
+  `env.reset()`(line 216,client.update() 之后)前插 `if os.environ.get("MANUAL_RESET"): input("[episode 结束]...按 Enter 复位")`
+  (备份 `_run_actor.py.bak_manualreset_20260616`，py_compile OK)；launcher 加 `export MANUAL_RESET=1`。
+  行为:episode 结束(成功/超时)→ 暂停 → 操作者手动协助拔插头/复位 → 按 Enter → env.reset 笛卡尔上提到 RESET_POSE。
+  约束:actor 须前台跑(input 读终端);首次启动的 reset 不门控;去掉 MANUAL_RESET 即恢复自动 reset。
+- **仍待(操作者，真机 motion)**：跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导插入 + 每条 episode 结束按 Enter 复位。我不代为启动(需手在控制器 + E-stop)。

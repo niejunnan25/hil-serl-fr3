@@ -157,6 +157,11 @@ RB deadman 语义:
 
 Reward 触发判据(2026-06-16 标定):仅当 `classifier > 0.7` **且** `rel-z < -0.05`(相对 RESET_POSE 真实下插 ≥5cm)才给 reward=1。`relz = obs["state"][2]`(RelativeFrame z vs RESET_POSE),`cls = sigmoid(classifier_fn(obs))[0]`。光满足分类器、没真插下去 = 不给奖励。
 
+**episode 间复位 = 手动门控(2026-06-16 新增,因机械臂自主拔插头不可靠)**:每条 episode 结束(成功或超时)后,actor **不自动 reset**,而是打印 `[episode 结束] 处理好插头/插座后按 Enter 复位 ...` 并**等你敲键**。你先手动协助拔出插头/复位插座,**再按 Enter** → 此时 `env.reset()` 才笛卡尔上提到 RESET_POSE(E-stop 就位)。
+- 由 launcher 的 `MANUAL_RESET=1` 开启(`_run_actor.py:216` 前的门控;改动备份 `_run_actor.py.bak_manualreset_20260616`)。想恢复自动 reset:去掉该环境变量(`MANUAL_RESET= scripts/run_actor_phaseC.sh` 或编辑脚本)。
+- **actor 必须前台跑**(input() 读终端;别 nohup/后台,否则 EOF 崩)。
+- **首次启动那一下 reset 不门控**——起脚本前先就位、E-stop 在手。
+
 ---
 
 ## 6. 监看 / 成功判据
