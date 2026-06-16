@@ -24,6 +24,11 @@ GELLO 抓取段示教 + Xbox 精插段示教/介入，纯端到端单 SAC policy
   **按 ☰ Menu(`start`)键切 XBOX 模式**（`hybrid_teleop.py:402 toggle=st.start`）→ 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、RT/LT=闭/开爪、**RB+A=直下插**；再按 ☰ 切回 GELLO(重锚)。
 - **actor（run_actor_phaseC.sh）= Xbox-only 在线介入**(2026-06-16 应操作者要求确认):wrapper 栈只有 `XboxIntervention`,无 GelloIntervention/Arbiter;`config.py:29` 死 import 已注释。**按住 RB 接管** → 右摇杆 L/R=**yaw**、U/D=Z、左摇杆=X/Y、D-pad=pitch/roll、A(配RB)=直下插;松 RB 交还策略。开局在 RESET_POSE 朝向。
   注：GELLO 模式没有 yaw 杆控（朝向来自主臂）是设计如此；要 Xbox 控 yaw 必须切到 XBOX 模式或用 actor 的 RB。
+- **故障速查：actor 里 yaw(右摇杆左右)/ D-pad 死、但平移(左摇杆 + 右摇杆上下)正常 —— 不是代码 bug**。
+  2026-06-16 已逐层核：控制器 RX=axis3 / RY=axis4 / D-pad=hat0 物理正常(jdump)；teleop_hub.read 映射正确；
+  normalize_action `a[3:6]=drotvec` 正确；hub 实测产出 `right_x=1.0 / dpad_x=1.0 / dpad_y=1.0`(hubtest)。
+  根因 = **actor 启动那刻手柄枚举瞬态**(Xbox 手柄会休眠/重连 → actor 一次性 init 的 pygame 句柄陈旧)。
+  **修法：起 actor 前先按一下手柄唤醒；若训练中控件失灵 = 手柄睡了/重连 → Ctrl-C actor 重启即可。**
 
 ## 执行策略
 - grill/discuss/plan/review：Opus 最高 effort（Fable 5 已停用，见全局 model-stage-policy）。

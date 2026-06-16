@@ -78,4 +78,10 @@ collect_classifier_images.py 默认 `camera_name="side_classifier"`，与上述�
   `config.get_environment` wrapper 栈本就只有 `XboxIntervention`(无 GelloIntervention / 无 TeleopArbiter)，
   XboxIntervention 只接 teleop_hub(pygame/Xbox)不碰 Dynamixel。`config.py:29` 的 `GelloIntervention` 仅为死 import，
   已注释(备份 config.py.bak_gellodisable_20260616，py_compile OK)。GELLO 只存在于 teach.sh/hybrid_teleop(repo B,采数用)。
-- **仍待(操作者，真机 motion)**：跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导插入 + 每条 episode 结束按 Enter 复位。我不代为启动(需手在控制器 + E-stop)。
+- **yaw/D-pad "死" 排查(非代码 bug)** ✅ 2026-06-16：操作者报 actor 里右摇杆左右(yaw)+ D-pad 无效、平移正常。
+  逐层核验:jdump 证控制器 RX=axis3/RY=axis4/D-pad=hat0 物理正常;teleop_hub.read 映射正确;normalize_action
+  `a[3:6]=drotvec` 正确;hubtest 实测 hub 产出 `right_x=1.0/dpad_x=1.0/dpad_y=1.0`。根因 = actor 启动时手柄枚举瞬态
+  (Xbox 休眠/重连→pygame 句柄陈旧)。修法:起 actor 前唤醒手柄;失灵则 Ctrl-C 重启。清了 xbox_intervention/teleop_hub 的 .pyc。
+- **清坏映射轮训练数据 + fresh 重训** ✅ 2026-06-16：kill 旧 learner,`ckpt → ckpt_brokenxbox_bak_20260616`,
+  step 0 重起(pid 3638019,GPU5,demo buffer 9632,5588/5589 listen)。
+- **仍待(操作者，真机 motion)**：唤醒手柄 → 跑 `scripts/run_actor_phaseC.sh` 起 actor + RB 引导(右摇杆左右控 yaw)+ 每条 episode 结束按 Enter 复位。我不代为启动(需手在控制器 + E-stop)。
