@@ -31,6 +31,8 @@ class ZEDCaptureConfig:
     depth: bool = False
     grab_retries: int = 30
     retry_sleep_s: float = 0.05
+    open_retries: int = 5          # ZED self-calib intermittently returns an open error
+                                   # ("POTENTIAL CALIBRATION ISSUE") that clears on retry
 
 
 class ZEDCapture:
@@ -53,10 +55,20 @@ class ZEDCapture:
         init.camera_fps = int(self.config.fps)
         init.depth_mode = sl.DEPTH_MODE.NONE if not self.config.depth else sl.DEPTH_MODE.NEURAL
         init.set_from_serial_number(int(self.config.serial_number))
-        err = self._camera.open(init)
-        if err != sl.ERROR_CODE.SUCCESS:
-            raise RuntimeError(f"failed to open ZED serial {self.config.serial_number}: {err}")
-        self._is_open = True
+        err = None
+        for _ in range(max(1, int(self.config.open_retries))):
+            err = self._camera.open(init)
+            if err == sl.ERROR_CODE.SUCCESS:
+                self._is_open = True
+                return
+            # Transient open failures (POTENTIAL CALIBRATION ISSUE from self-calib on an
+            # occluded/low-texture scene) clear on retry — close + wait + try again.
+            try:
+                self._camera.close()
+            except Exception:
+                pass
+            time.sleep(0.7)
+        raise RuntimeError(f"failed to open ZED serial {self.config.serial_number}: {err}")
 
     def read(self) -> Tuple[bool, np.ndarray]:
         if not self._is_open:

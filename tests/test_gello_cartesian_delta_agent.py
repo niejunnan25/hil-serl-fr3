@@ -220,6 +220,57 @@ class TestSafetyLimits:
         agent.step(q, gripper=0.0)
         assert np.allclose(agent.prev_joints, q)
 
+    def test_max_rot_step_violation_returns_zero_action(self):
+        """A large orientation jump with translation UNDER max_step must still
+        trip the safety check via the rotation cap and return a zero action.
+
+        joint7 += 0.2 rad from home produces ~27mm translation and ~0.2 rad
+        rpy. We lift max_step/max_total_delta so translation passes, isolating
+        the rotation cap (default 0.1 rad)."""
+        agent = _agent(max_step=0.5, max_total_delta=1.0)  # default max_rot_step=0.1
+        agent.reset(np.zeros(7))
+        q_spin = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2])
+        action, info = agent.step(q_spin, gripper=0.0)
+        # Sanity: this move's translation is below the lifted translation cap,
+        # so only the rotation cap can flag it.
+        assert info["step_delta_norm"] <= 0.5
+        assert info["rot_delta_norm"] > 0.1
+        assert info["safe"] is False
+        assert "max_rot_step exceeded" in info["violation"]
+        # Zero translation AND zero rotation channels on violation.
+        assert np.allclose(info["cartesian_delta"], 0.0, atol=1e-9)
+        assert np.allclose(action[:6], 0.0)
+        assert action[6] == pytest.approx(0.0)
+        assert agent.violation_count == 1
+
+    def test_max_rot_step_does_not_advance_prev_joints(self):
+        """A rotation-cap violation must not advance prev_joints, mirroring the
+        translation-cap behavior."""
+        agent = _agent(max_step=0.5, max_total_delta=1.0)
+        agent.reset(np.zeros(7))
+        prev_before = agent.prev_joints.copy()
+        q_spin = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2])
+        agent.step(q_spin, gripper=0.0)
+        assert np.allclose(agent.prev_joints, prev_before)
+
+    def test_translation_cap_takes_precedence_in_message(self):
+        """When BOTH translation and rotation exceed their caps, the violation
+        message reports translation first (translation check runs first)."""
+        # joint7 += 0.5 -> ~67mm trans (> 0.003) AND ~0.51 rad rpy (> 0.1)
+        agent = _agent(max_step=0.003, max_total_delta=1.0)
+        agent.reset(np.zeros(7))
+        q = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5])
+        _, info = agent.step(q, gripper=0.0)
+        assert info["safe"] is False
+        assert "max_step exceeded" in info["violation"]
+
+    def test_rot_delta_norm_present_in_info(self):
+        agent = _agent()
+        agent.reset(np.zeros(7))
+        _, info = agent.step(np.zeros(7), gripper=0.0)
+        assert "rot_delta_norm" in info
+        assert isinstance(info["rot_delta_norm"], float)
+
 
 # ---------------------------------------------------------------------------
 # CLI / dry-run

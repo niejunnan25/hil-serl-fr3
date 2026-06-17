@@ -285,8 +285,13 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry
 
     try:
         s0 = get_state(session, server, timeout=CTRL_TIMEOUT)
+        # Seed the gripper edge state from the robot's ACTUAL gripper (Franka width:
+        # 0=closed .. ~0.08=open), so the operator's first GELLO release/squeeze
+        # produces the correct open/close edge instead of a no-op.
+        gripper_closed = float(np.asarray(s0["gripper_pos"]).reshape(-1)[0]) < 0.04
         print(f"[init] server={server} dry_run={dry_run} hz={hz} dur={duration}s "
-              f"currpos={np.round(np.asarray(s0['pose']), 4).tolist()}", flush=True)
+              f"currpos={np.round(np.asarray(s0['pose']), 4).tolist()} "
+              f"gripper_closed_init={gripper_closed}", flush=True)
 
         from gello.dynamixel.driver import DynamixelDriver
 
@@ -326,7 +331,7 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry
                 nextpos, _step, applied_drotvec = apply_cartesian_delta(
                     currpos, dxyz, drotvec, max_step)
                 applied_dxyz = nextpos[:3] - currpos[:3]
-                gripper_pm = 1.0 if gripper_closed else -1.0
+                gripper_pm = -1.0 if gripper_closed else 1.0
                 action = normalize_action(applied_dxyz, applied_drotvec, gripper_pm)
 
                 sf = cam_side.latest()

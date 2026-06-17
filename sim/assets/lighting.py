@@ -4,8 +4,8 @@ Without lights, RGB output is all-zero (Phase 0 smoke observation). This module
 provides illumination tuned to match real ZED frame mean intensities so the
 existing 8010 policy sees sim images close to its training distribution.
 
-Reference values sampled from
-``/home/robot/droid/record/20260413_140912/frames/`` step 0:
+Reference values sampled from a recorded ZED capture (external/wrist
+frames, step 0):
 * external mean intensity ≈ 136 / 255
 * wrist mean intensity    ≈ 106 / 255
 * table dark patch median ≈ (55, 57, 50) ≈ 0.22

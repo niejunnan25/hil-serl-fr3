@@ -54,7 +54,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Configuration: the 5 contaminated files (relative to repo root)
+# Configuration: the 8 contaminated files (relative to repo root)
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,6 +64,9 @@ CONTAMINATED_FILES = (
     REPO_ROOT / "sim" / "safety" / "runtime_check.py",
     REPO_ROOT / "sim" / "safety" / "feasibility_checker.py",
     REPO_ROOT / "sim" / "data" / "sim_replay_pipeline.py",
+    REPO_ROOT / "sim" / "data" / "gello_replay.py",
+    REPO_ROOT / "sim" / "assets" / "official_fr3_loader.py",
+    REPO_ROOT / "sim" / "assets" / "lighting.py",
 )
 
 # Per-file expected residuals. Phase 2 will clear all of these.

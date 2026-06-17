@@ -2,14 +2,20 @@
 """GelloDroidAdapter — 将 GELLO 输出适配为 DROID step() 输入 (方案C)"""
 
 import argparse
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 import numpy as np
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS  # noqa: E402
+
 JOINT_SIGNS = np.array([1, -1, 1, 1, 1, -1, 1], dtype=float)
-FR3_LOWER_LIMITS = np.array([-2.8, -1.66, -2.8, -2.97, -2.8, 0.08, -2.8])
-FR3_UPPER_LIMITS = np.array([2.8, 1.66, 2.8, -0.17, 2.8, 3.65, 2.8])
 
 @dataclass
 class AdapterConfig:

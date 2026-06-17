@@ -121,3 +121,52 @@ class TestHomeReached:
         q = np.asarray(RESET_JOINT_TARGET).copy()
         q[6] += 0.3
         assert home_reached(q, tol=0.15) is False
+
+
+class TestStopCleanupOrdering:
+    """Stopping while A/RB is held must lower force caps before sending a hold pose."""
+
+    def test_stop_cleanup_restores_hold_clip_before_reanchoring_pose(self):
+        from hybrid_teleop import build_stop_cleanup_requests, XBOX_HOLD_CLIP
+
+        requests = build_stop_cleanup_requests([0.1, 0.2, 0.3, 0, 0, 0, 1])
+
+        assert requests[0][0] == "update_param"
+        assert requests[0][1] == {
+            "translational_clip_z": XBOX_HOLD_CLIP,
+            "translational_clip_neg_z": XBOX_HOLD_CLIP,
+        }
+        assert requests[1][0] == "pose"
+        np.testing.assert_allclose(requests[1][1], [0.1, 0.2, 0.3, 0, 0, 0, 1])
+
+    def test_stop_cleanup_restores_hold_clip_even_when_pose_refresh_fails(self):
+        from hybrid_teleop import execute_stop_cleanup, XBOX_HOLD_CLIP
+
+        calls = []
+
+        class Session:
+            def post(self, route, json, timeout):
+                calls.append((route, json, timeout))
+
+        def get_current_pose():
+            raise TimeoutError("getstate timeout")
+
+        def post_pose_fn(session, url, pose, timeout):
+            calls.append(("pose", pose, timeout))
+
+        execute_stop_cleanup(
+            Session(),
+            "http://robot/",
+            get_current_pose=get_current_pose,
+            post_pose_fn=post_pose_fn,
+            fallback_currpos=[0.1, 0.2, 0.3, 0, 0, 0, 1],
+            timeout=0.5,
+        )
+
+        assert calls[0][0] == "http://robot/update_param"
+        assert calls[0][1] == {
+            "translational_clip_z": XBOX_HOLD_CLIP,
+            "translational_clip_neg_z": XBOX_HOLD_CLIP,
+        }
+        assert calls[1][0] == "pose"
+        np.testing.assert_allclose(calls[1][1], [0.1, 0.2, 0.3, 0, 0, 0, 1])

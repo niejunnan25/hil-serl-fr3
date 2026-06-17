@@ -64,7 +64,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from gello_cartesian_delta_agent import GelloCartesianDeltaAgent
+from gello_cartesian_delta_agent import (
+    GelloCartesianDeltaAgent,
+    DEFAULT_POS_SCALE,
+    DEFAULT_RPY_SCALE,
+)
 from fk_converter import forward_kinematics, joints_to_cartesian_delta
 
 # Try importing DynamixelDriver; fail gracefully if gello package is missing
@@ -145,8 +149,8 @@ class GelloIntervention(gym.ActionWrapper):
         self._agent = GelloCartesianDeltaAgent(
             max_step=0.003,
             max_total_delta=0.03,
-            pos_scale=0.1,
-            rpy_scale=0.2,
+            pos_scale=DEFAULT_POS_SCALE,
+            rpy_scale=DEFAULT_RPY_SCALE,
         )
 
         # Intervention state
@@ -163,6 +167,15 @@ class GelloIntervention(gym.ActionWrapper):
         # read (AssertionError) must never crash the training loop. We
         # log once then keep returning the policy action.
         self._device_error_logged: bool = False
+
+        # Refusal flag (review item 13): set True for one tick when a
+        # hard safety violation (RuntimeError from the agent) forces us
+        # to refuse the intervention and return the policy action.
+        # action() cannot carry an info dict (its contract is
+        # (np.ndarray, bool)), so step() reads this flag and surfaces
+        # info["intervene_refused"] = True — making the failure visible
+        # instead of silently swallowed.
+        self._intervene_refused: bool = False
 
     # ------------------------------------------------------------------
     # GELLO device management
@@ -280,7 +293,10 @@ class GelloIntervention(gym.ActionWrapper):
             expert_action, info = self._agent.step(gello_joints, gripper=gripper)
         except RuntimeError as exc:
             # The agent raised on a hard safety violation. Downgrade:
-            # end the engagement and return the policy action.
+            # end the engagement and return the policy action. Mark the
+            # refusal so step() can surface info["intervene_refused"]
+            # instead of silently swallowing the failure.
+            self._intervene_refused = True
             if not self._budget_overrun_logged:
                 print(
                     f"[GelloIntervention] safety violation, downgrading to "
@@ -358,11 +374,14 @@ class GelloIntervention(gym.ActionWrapper):
             (obs, rew, done, truncated, info) with info["intervene_action"]
             set when the expert action replaced the policy action.
         """
+        self._intervene_refused = False
         new_action, replaced = self.action(action)
 
         obs, rew, done, truncated, info = self.env.step(new_action)
         if replaced:
             info["intervene_action"] = new_action
+        if self._intervene_refused:
+            info["intervene_refused"] = True
         return obs, rew, done, truncated, info
 
     # ------------------------------------------------------------------

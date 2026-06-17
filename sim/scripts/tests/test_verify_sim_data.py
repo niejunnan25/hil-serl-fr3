@@ -128,6 +128,49 @@ def test_state_keys_order_check_uses_state_keys_ordered(monkeypatch):
 # ---------------------------------------------------------------------------
 # 7) CLI 命令行入口
 # ---------------------------------------------------------------------------
+def test_state_keys_order_segment_layout_validates_order():
+    """codex #2 真顺序校验: 提供 producer slice layout 时, 子块换位/数据换位必须 fail.
+
+    旧实现忽略 segments、只看 flat shape/dtype, 故 reordered state 会静默 pass。
+    本测试证明新实现真正用 STATE_KEYS_ORDERED + STATE_KEY_DIMS 做逐段边界校验。
+    """
+    from sim.scripts.verify_sim_data import verify_state_keys_order
+    from sim.data.contract import STATE_KEYS_ORDERED, STATE_KEY_DIMS
+
+    rng = np.random.default_rng(0)
+    segs = {
+        k: rng.normal(size=d).astype(np.float32)
+        for k, d in zip(STATE_KEYS_ORDERED, STATE_KEY_DIMS)
+    }
+    flat = np.concatenate(
+        [np.asarray(segs[k]).reshape(-1) for k in STATE_KEYS_ORDERED]
+    ).astype(np.float32)
+
+    # correct ordered layout => True
+    assert verify_state_keys_order(flat, segments=segs) is True
+
+    # permute the ORDER of the first two sub-blocks => must be False
+    order = list(STATE_KEYS_ORDERED)
+    order[0], order[1] = order[1], order[0]
+    permuted = {k: segs[k] for k in order}
+    assert verify_state_keys_order(flat, segments=permuted) is False, (
+        "reordered sub-blocks must fail verify_state_keys_order"
+    )
+
+    # swap the DATA of two equal-size sub-blocks (tcp_force <-> tcp_torque),
+    # keeping key order correct => concat no longer equals flat => must be False
+    swapped = {k: segs[k] for k in STATE_KEYS_ORDERED}
+    swapped["tcp_force"], swapped["tcp_torque"] = (
+        segs["tcp_torque"], segs["tcp_force"],
+    )
+    assert verify_state_keys_order(flat, segments=swapped) is False, (
+        "data-swapped sub-blocks must fail verify_state_keys_order"
+    )
+
+    # flat-only call path (no segments) preserves the original behavior
+    assert verify_state_keys_order(flat) is True
+
+
 def test_cli_verify_valid_pkl_exits_zero(valid_pkl_path, capsys):
     """CLI: verify valid pkl, exit 0, 输出报告."""
     from sim.scripts.verify_sim_data import main

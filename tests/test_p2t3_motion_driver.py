@@ -166,6 +166,9 @@ class TestMotionDriver:
                     "--hz", "20",
                     "--duration", "0.2",
                     "--log", str(log),
+                    # No real GELLO in CI: allow the synthetic leader so the
+                    # HTTP/FK contract is exercised against the MOCK server.
+                    "--allow-synthetic-leader",
                 ],
                 env=env,
                 timeout=20,
@@ -181,6 +184,167 @@ class TestMotionDriver:
         # First commanded pose ~= current pose (no startup jump).
         first = np.array(posted[0]["arr"])
         np.testing.assert_allclose(first[:3], pose[:3], atol=2e-3)
+
+    def test_full_mode_holds_pose_on_server_reject(self, tmp_path):
+        # If the server rejects a streaming /pose mid-stream, the driver must
+        # still exit rc=9 AND issue a best-effort HOLD /pose (re-anchor the
+        # impedance setpoint) before returning - franka_server has no /stop
+        # route, so "hold current pose" is the only safe cleanup.
+        import json as _json
+        import threading as _threading
+        from http.server import BaseHTTPRequestHandler as _BH, HTTPServer as _HS
+
+        log = tmp_path / "reject.log"
+        q0 = FR3_DEFAULT_JOINTS.copy()
+        pose = forward_kinematics(q0)
+        pose_calls = {"n": 0}
+        recorded = []
+
+        class H(_BH):
+            def log_message(self, *a):
+                pass
+
+            def _read(self):
+                n = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(n) if n else b"{}"
+                try:
+                    return _json.loads(raw or b"{}")
+                except Exception:
+                    return {}
+
+            def _send(self, obj, code=200):
+                body = _json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                route = self.path.rstrip("/")
+                body = self._read()
+                recorded.append(route)
+                if route.endswith("/getstate"):
+                    self._send({"q": list(map(float, q0)), "pose": list(map(float, pose))})
+                elif route.endswith("/pose"):
+                    pose_calls["n"] += 1
+                    if pose_calls["n"] == 1:
+                        self._send({"error": "conflict"}, code=409)  # reject first stream POST
+                    else:
+                        self._send({})  # allow the hold POST
+                else:
+                    self._send({})
+
+        srv = _HS(("127.0.0.1", 0), H)
+        t = _threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/"
+        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": APPROVAL}
+        try:
+            r = _run(
+                [
+                    PYTHON_BIN, str(DRIVER),
+                    "--mode", "full",
+                    "--server", url,
+                    "--hz", "20",
+                    "--duration", "0.5",
+                    "--log", str(log),
+                    "--allow-synthetic-leader",
+                ],
+                env=env,
+                timeout=20,
+            )
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        text = log.read_text()
+        assert r.returncode == 9, (r.returncode, r.stdout, r.stderr, text)
+        pose_posts = [rt for rt in recorded if rt.endswith("/pose")]
+        assert len(pose_posts) >= 2, (
+            f"expected a hold /pose after the rejected stream POST, got {pose_posts}"
+        )
+        assert "safety hold" in text, text
+
+    def test_full_mode_holds_pose_on_sigint(self, tmp_path):
+        # SIGINT mid-stream must NOT crash uncaught; the driver must exit
+        # cleanly (rc=10) and issue a HOLD /pose so the arm holds where it is.
+        import json as _json
+        import signal as _signal
+        import threading as _threading
+        import time as _time
+        from http.server import BaseHTTPRequestHandler as _BH, HTTPServer as _HS
+
+        log = tmp_path / "sigint.log"
+        q0 = FR3_DEFAULT_JOINTS.copy()
+        pose = forward_kinematics(q0)
+        recorded = []
+
+        class H(_BH):
+            def log_message(self, *a):
+                pass
+
+            def _read(self):
+                n = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(n) if n else b"{}"
+                try:
+                    return _json.loads(raw or b"{}")
+                except Exception:
+                    return {}
+
+            def _send(self, obj):
+                body = _json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                route = self.path.rstrip("/")
+                self._read()
+                recorded.append(route)
+                if route.endswith("/getstate"):
+                    self._send({"q": list(map(float, q0)), "pose": list(map(float, pose))})
+                else:
+                    self._send({})
+
+        srv = _HS(("127.0.0.1", 0), H)
+        t = _threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        url = f"http://127.0.0.1:{srv.server_address[1]}/"
+        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": APPROVAL}
+        proc = subprocess.Popen(
+            [
+                PYTHON_BIN, str(DRIVER),
+                "--mode", "full",
+                "--server", url,
+                "--hz", "10",
+                "--duration", "30",
+                "--log", str(log),
+                "--allow-synthetic-leader",
+            ],
+            cwd=ROOT, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            _time.sleep(1.0)  # let it stream a few ticks
+            before = len([rt for rt in recorded if rt.endswith("/pose")])
+            proc.send_signal(_signal.SIGINT)
+            try:
+                proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise AssertionError("driver did not exit after SIGINT")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        text = log.read_text()
+        after = len([rt for rt in recorded if rt.endswith("/pose")])
+        assert proc.returncode == 10, (proc.returncode, text)
+        assert "KeyboardInterrupt" in text, text
+        assert "safety hold" in text, text
+        assert after > before, "expected a hold /pose after SIGINT"
 
     def test_full_mode_fk_bias_gate_refuses_on_frame_mismatch(self, tmp_path):
         # If FK(q0) disagrees with the server's reported current pose by more
@@ -200,6 +364,7 @@ class TestMotionDriver:
                     "--hz", "20",
                     "--duration", "0.2",
                     "--log", str(log),
+                    "--allow-synthetic-leader",
                 ],
                 env=env,
                 timeout=20,
@@ -208,6 +373,33 @@ class TestMotionDriver:
         assert r.returncode == 11, (r.returncode, r.stdout, r.stderr, log.read_text())
         assert len(posted) == 0, "bias gate must POST no /pose"
         assert "mismatch" in log.read_text().lower()
+
+    def test_full_mode_aborts_when_gello_unavailable_no_pose(self, tmp_path):
+        # MOTION SAFETY: in --full, if the real GELLO cannot be opened the
+        # driver must ABORT (rc 12) and POST nothing — never fabricate a
+        # synthetic leader trajectory onto the real robot. gello is not
+        # importable in CI, so without --allow-synthetic-leader the open fails.
+        log = tmp_path / "full.log"
+        q0 = FR3_DEFAULT_JOINTS.copy()
+        pose = forward_kinematics(q0)  # bias == 0; would pass the bias gate
+        env = {**ENV_BASE, "FR3_GELLO_E2E_APPROVAL": APPROVAL}
+        with mock_franka_server(q0, pose) as srv:
+            r = _run(
+                [
+                    PYTHON_BIN, str(DRIVER),
+                    "--mode", "full",
+                    "--server", srv["url"],
+                    "--hz", "20",
+                    "--duration", "0.2",
+                    "--log", str(log),
+                ],
+                env=env,
+                timeout=20,
+            )
+            posted = srv["posted"]
+        assert r.returncode == 12, (r.returncode, r.stdout, r.stderr)
+        assert len(posted) == 0, "no /pose may be issued from a synthetic leader"
+        assert "refusing to synthesize" in r.stderr.lower()
 
 
 # ---------------------------------------------------------------------------

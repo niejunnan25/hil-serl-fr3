@@ -81,6 +81,6 @@ def test_angle_tolerance_deg_in_contract():
 # ---------------------------------------------------------------------------
 # A2: episode
 # ---------------------------------------------------------------------------
-def test_max_episode_length_is_150():
+def test_max_episode_length_is_300():
     from sim.data.contract import MAX_EPISODE_LENGTH
-    assert MAX_EPISODE_LENGTH == 150
+    assert MAX_EPISODE_LENGTH == 300

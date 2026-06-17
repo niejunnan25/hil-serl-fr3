@@ -276,7 +276,7 @@ class TestModuleSurface:
 class TestFR3RobotHTTP:
     def test_healthz_probe(self):
         s = FakeFrankaServer()
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url)
             r.connect()
         assert s.calls[0][0] == "/healthz"
@@ -284,14 +284,14 @@ class TestFR3RobotHTTP:
     def test_healthz_failure_raises_connection_error(self):
         s = FakeFrankaServer()
         s.raise_on_healthz = requests.ConnectionError("refused")
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url)
             with pytest.raises(ConnectionError):
                 r.connect()
 
     def test_getstate_returns_full_state_with_tcp_pose(self):
         s = FakeFrankaServer()
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url)
             state = r.get_state()
         for key in ("pose", "vel", "force", "torque", "q", "dq", "gripper_pos"):
@@ -306,7 +306,7 @@ class TestFR3RobotHTTP:
 
     def test_send_pose_uses_arr_envelope(self):
         s = FakeFrankaServer()
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url)
             r.send_pose_command(np.array([0.45, 0.1, 0.30, 0.0, 0.0, 0.0, 1.0]))
         assert s.calls[-1][0] == "/pose"
@@ -315,7 +315,7 @@ class TestFR3RobotHTTP:
 
     def test_gripper_commands_dispatch(self):
         s = FakeFrankaServer()
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url)
             r.send_gripper_command("open")
             r.send_gripper_command("close")
@@ -326,13 +326,13 @@ class TestFR3RobotHTTP:
         def boom(url, *a, **kw):
             raise requests.ConnectionError("transient")
 
-        with patch.object(requests, "post", side_effect=boom):
+        with patch.object(requests.Session, "post", side_effect=boom):
             r = rgds.FR3Robot(server_url="http://127.0.0.2:5000")
             r.clear_error()  # must not raise
 
     def test_server_url_strips_trailing_slash(self):
         s = FakeFrankaServer()
-        with patch.object(requests, "post", side_effect=s.post):
+        with patch.object(requests.Session, "post", side_effect=s.post):
             r = rgds.FR3Robot(server_url=s.base_url + "/")
             r.connect()
         assert s.calls[0][0] == "/healthz"
@@ -409,7 +409,7 @@ class TestRecordedNPZSchema:
         _install_gello(np.array([0.0] * 7 + [0.5]))
         ns = _live_namespace(str(out_dir), duration=0.15)
         try:
-            with patch.object(requests, "post", side_effect=server.post):
+            with patch.object(requests.Session, "post", side_effect=server.post):
                 fpath = rgds.run_recording(ns)
         finally:
             uninstall_mock()
@@ -450,7 +450,7 @@ class TestRecordedNPZSchema:
         _install_gello(np.array([0.0] * 7 + [0.5]))
         ns = _live_namespace(str(out_dir), duration=0.20)
         try:
-            with patch.object(requests, "post", side_effect=server.post):
+            with patch.object(requests.Session, "post", side_effect=server.post):
                 fpath = rgds.run_recording(ns)
         finally:
             uninstall_mock()
@@ -465,7 +465,7 @@ class TestRecordedNPZSchema:
         _install_gello(np.array([0.0] * 7 + [0.5]))
         ns = _live_namespace(str(out_dir), duration=0.10)
         try:
-            with patch.object(requests, "post", side_effect=server.post):
+            with patch.object(requests.Session, "post", side_effect=server.post):
                 fpath = rgds.run_recording(ns)
         finally:
             uninstall_mock()
@@ -483,7 +483,7 @@ class TestLiveUsesPoseEndpoint:
         _install_gello(np.array([0.0] * 7 + [0.5]))
         ns = _live_namespace(str(out_dir), duration=0.15)
         try:
-            with patch.object(requests, "post", side_effect=server.post):
+            with patch.object(requests.Session, "post", side_effect=server.post):
                 rgds.run_recording(ns)
         finally:
             uninstall_mock()
@@ -519,7 +519,7 @@ class TestDryRunNoNetwork:
             raise AssertionError("dry-run must not hit the network")
 
         try:
-            with patch.object(requests, "post", side_effect=_fail):
+            with patch.object(requests.Session, "post", side_effect=_fail):
                 fpath = rgds.run_recording(ns)
         finally:
             uninstall_mock()
@@ -574,7 +574,7 @@ class TestAbortReasons:
 
         ns = _live_namespace(str(tmp_path), duration=1.0)
         try:
-            with patch.object(requests, "post", side_effect=server.post):
+            with patch.object(requests.Session, "post", side_effect=server.post):
                 fpath = rgds.run_recording(ns)
         finally:
             uninstall_mock()

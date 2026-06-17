@@ -50,8 +50,7 @@ GELLO_MAX_TOTAL_DELTA = 0.03  # meters cumulative
 GELLO_NUM_FRAMES = 100        # frames to read for calibration
 
 # FR3 joint limits (from record_gello_demos.py)
-FR3_LOWER_LIMITS = np.array([-2.8, -1.66, -2.8, -2.97, -2.8, 0.08, -2.8])
-FR3_UPPER_LIMITS = np.array([2.8, 1.66, 2.8, -0.17, 2.8, 3.65, 2.8])
+from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS
 
 # Cartesian safety box (FR3 typical workspace)
 # These define a conservative bounding box for the end-effector.
@@ -71,7 +70,7 @@ IMPEDANCE_PARAM_BOUNDS: list[tuple[str, float, float, str]] = [
 ]
 
 # Max allowed clip value (meters or radians)
-MAX_TRANSLATIONAL_CLIP = 0.05   # 5 cm
+MAX_TRANSLATIONAL_CLIP = 0.012   # 12 mm
 MAX_ROTATIONAL_CLIP = 0.10      # ~5.7 deg
 
 # Server defaults
@@ -80,7 +79,11 @@ DEFAULT_GELLO_PORT = "/dev/ttyUSB0"
 DEFAULT_GELLO_BAUDRATE = 57600
 TIMEOUT_S = 5.0
 
-# ── preset impedance params (from test_impedance_params.py) ───────────────────
+# ── preset impedance params ────────────────────────────────────────
+# CANONICAL SOURCE: experiments/plug_insertion/config.py EnvConfig.COMPLIANCE_PARAM /
+# PRECISION_PARAM (the live runtime config the actor pushes to serl_franka_controllers
+# via /update_param). These dicts mirror that config so this safety verifier checks
+# against the ACTUAL operating point. If the live config changes, update these to match.
 
 COMPLIANCE_PARAM: dict[str, float] = {
     "translational_stiffness": 2000,
@@ -94,12 +97,12 @@ COMPLIANCE_PARAM: dict[str, float] = {
     "translational_clip_neg_x": 0.005,
     "translational_clip_neg_y": 0.005,
     "translational_clip_neg_z": 0.0035,
-    "rotational_clip_x": 0.02,
-    "rotational_clip_y": 0.02,
-    "rotational_clip_z": 0.015,
-    "rotational_clip_neg_x": 0.02,
-    "rotational_clip_neg_y": 0.02,
-    "rotational_clip_neg_z": 0.015,
+    "rotational_clip_x": 0.05,
+    "rotational_clip_y": 0.05,
+    "rotational_clip_z": 0.05,
+    "rotational_clip_neg_x": 0.05,
+    "rotational_clip_neg_y": 0.05,
+    "rotational_clip_neg_z": 0.05,
     "rotational_Ki": 0,
 }
 
@@ -111,16 +114,16 @@ PRECISION_PARAM: dict[str, float] = {
     "translational_Ki": 0.0,
     "translational_clip_x": 0.008,
     "translational_clip_y": 0.008,
-    "translational_clip_z": 0.006,
+    "translational_clip_z": 0.0072,
     "translational_clip_neg_x": 0.008,
     "translational_clip_neg_y": 0.008,
-    "translational_clip_neg_z": 0.006,
-    "rotational_clip_x": 0.025,
-    "rotational_clip_y": 0.025,
-    "rotational_clip_z": 0.02,
-    "rotational_clip_neg_x": 0.025,
-    "rotational_clip_neg_y": 0.025,
-    "rotational_clip_neg_z": 0.02,
+    "translational_clip_neg_z": 0.0072,
+    "rotational_clip_x": 0.05,
+    "rotational_clip_y": 0.05,
+    "rotational_clip_z": 0.05,
+    "rotational_clip_neg_x": 0.05,
+    "rotational_clip_neg_y": 0.05,
+    "rotational_clip_neg_z": 0.05,
     "rotational_Ki": 0.0,
 }
 

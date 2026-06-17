@@ -26,7 +26,8 @@ A2: 8D 旧实现 (joint 7 + gripper 1) → 25D 新实现 (per sim/data/contract.
     force/torque 暂填 0 (A9 之后接 contact sensor)。
 
 用法 (on fr3-desktop-ts):
-    source /home/robot/miniconda3/etc/profile.d/conda.sh && conda activate isaaclab
+    # Activate the sim-side conda env first (caller's responsibility):
+    #   conda activate isaaclab
     python gello_replay.py --npz /tmp/gello_demos/demo_20260610_120000.npz
     python gello_replay.py --npz /tmp/gello_demos/demo_20260610_120000.npz \\
         --output /tmp/sim_replays/demo_sim.pkl --sub-steps 20
@@ -78,7 +79,7 @@ else:
 # Project imports (tolerate missing fk_converter/normalize_action in CI/dev)
 # ===========================================================================
 # A4 deviation: wrap fk_converter / normalize_action imports in try/except.
-# /home/robot/... only exists on fr3-desktop-ts, so a vanilla dev box
+# the fr3-desktop gello_pipeline path only exists on that host, so a vanilla dev box
 # cannot import this module otherwise — and that would block every
 # constant test below. Surfaces None on failure; the actual replay_*()
 # entry points then raise a clear error when invoked.
@@ -86,12 +87,17 @@ else:
 # A2 deviation: also search the local repo's scripts/ dir (where
 # fk_converter.py and normalize_action.py live in this checkout),
 # so replay_pure_fk() can actually run for unit tests on dev boxes
-# that don't have the /home/robot/... path.
+# that don't have the fr3-desktop gello_pipeline path.
 import pathlib
 GELLO_PIPELINE_CANDIDATES = [
-    "/home/robot/serl_projects/hil-serl-fr3/scripts/gello_pipeline",
+    # Repo-relative scripts/ dir (where fk_converter.py / normalize_action.py
+    # live in this checkout). An optional env var lets fr3-desktop point at its
+    # own gello_pipeline tree without hardcoding a host path here (L1 isolation).
     str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts"),
 ]
+_GELLO_PIPELINE_ENV = os.environ.get("GELLO_PIPELINE_DIR")
+if _GELLO_PIPELINE_ENV:
+    GELLO_PIPELINE_CANDIDATES.insert(0, _GELLO_PIPELINE_ENV)
 for _p in GELLO_PIPELINE_CANDIDATES:
     if os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
@@ -115,14 +121,20 @@ from sim.data.contract import (
     ACTION_SCALE,
     IMAGE_KEY_ALIAS_MAP,
     VALID_PKL_IMAGE_KEYS,
+    FR3_HOME_JOINTS as _FR3_HOME_JOINTS,
 )
 
 DEFAULT_POS_SCALE     = ACTION_SCALE[0]   # 0.015  (dx, dy, dz)
 DEFAULT_RPY_SCALE     = ACTION_SCALE[3]   # 0.1    (droll, dpitch, dyaw)
 DEFAULT_GRIPPER_SCALE = ACTION_SCALE[6]   # 1.0    (gripper)
 
-FRANKA_USD = "/home/robot/plug_insertion_sim/assets/panda_arm_hand.usd"
-FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
+# Canonical FR3 mesh from sim/assets/paths.py. NOTE: this REPLACES the old
+# panda-hand USD (which only existed on the fr3-desktop plug_insertion_sim
+# tree and is inconsistent with this module's fr3-joint naming). Spawning
+# fr3.usd aligns the mesh with the joint names and removes the host-path
+# hardcode (item 16).
+from sim.assets.paths import FR3_USD_PATH as FRANKA_USD
+FR3_HOME_JOINTS = np.array(_FR3_HOME_JOINTS)
 
 IMAGE_H, IMAGE_W, IMAGE_C = 128, 128, 3
 
@@ -398,8 +410,8 @@ def _capture_camera_rgb(scene: Any) -> np.ndarray:
     """从 scene 中读取 camera RGB，若无 camera 则返回占位。"""
     try:
         # 检查 scene 中是否有 camera sensor
-        if hasattr(scene, "keys") and "camera" in scene.keys():
-            camera_data = scene["camera"].data
+        if hasattr(scene, "keys") and "side_policy_cam" in scene.keys():
+            camera_data = scene["side_policy_cam"].data
             rgb = camera_data.output["rgb"]  # (B, H, W, 3) torch.uint8
             img = rgb[0]  # (H, W, 3)
             img = img.permute(2, 0, 1).contiguous()  # (3, H, W)
@@ -452,8 +464,12 @@ def replay_in_sim(
     print(f"[REPLAY] pos_scale={pos_scale}, rpy_scale={rpy_scale}")
 
     # FK: 计算 Cartesian deltas
-    print("[REPLAY] Computing Cartesian deltas via FK...")
-    cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)
+    # ITEM 25: use the corrected sim FK (sim.kinematics.fr3_fk via
+    # _local_trajectory_to_cartesian_deltas) so the GPU replay path and the
+    # pure-FK path share ONE FK source and neither depends on the
+    # ~50cm-wrong scripts/fk_converter / its fr3-desktop twin.
+    print("[REPLAY] Computing Cartesian deltas via sim.kinematics.fr3_fk...")
+    cartesian_deltas = _local_trajectory_to_cartesian_deltas(joint_poses)
     print(f"[REPLAY] Deltas shape: {cartesian_deltas.shape}")
 
     # 构建 scene
@@ -461,8 +477,10 @@ def replay_in_sim(
 
     # 构建 transitions
     transitions = []
-    # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
-    action_scale = list(ACTION_SCALE)
+    # scripts/normalize_action.py uses a 3-element [pos_scale, rpy_scale, gripper_scale]
+    # convention (xyz/scale[0], rpy/scale[1]); ACTION_SCALE is the 7-element form, so map
+    # rpy to ACTION_SCALE[3]=0.1 (NOT [1]=0.015) or rpy is ~6.7x over-scaled then saturates.
+    action_scale = [ACTION_SCALE[0], ACTION_SCALE[3], ACTION_SCALE[6]]
     start_time = time.time()
     # A2: 25D state needs prev_tcp_pose for tcp_vel numerical differentiation
     prev_tcp_pose = None
@@ -626,16 +644,25 @@ def replay_pure_fk(
         gripper_states = gripper_states[:N]
 
     print(f"\n[PURE FK] {N} frames")
-    if trajectory_to_cartesian_deltas is not None:
-        cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)
-    else:
-        # A2 fallback: use in-worktree sim.kinematics.fr3_fk when the
-        # external scripts/fk_converter is unavailable (dev box / CI).
-        print("[PURE FK] gello_pipeline missing; using sim.kinematics.fr3_fk fallback")
-        cartesian_deltas = _local_trajectory_to_cartesian_deltas(joint_poses)
+    # ITEM 25: FK source unified on the corrected sim FK
+    # (sim.kinematics.fr3_fk, Rz(-45deg)-fixed in Tier 2 to match the
+    # live/pinocchio-validated hybrid_teleop.CorrectFK). The external
+    # scripts/fk_converter (standard-DH, ~50cm-wrong per hybrid_teleop
+    # docstring) and its fr3-desktop twin are NO LONGER used as the
+    # delta source here. capture_observation() already derives the 25D
+    # tcp_pose from fr3_fk, so the action deltas and the state now ride
+    # ONE FK (verified: fr3_fk vs scripts/fk_converter differ by up to
+    # 1.31 m / 180 deg over random q).
+    print("[PURE FK] FK source: sim.kinematics.fr3_fk (corrected, Rz-fixed)")
+    cartesian_deltas = _local_trajectory_to_cartesian_deltas(joint_poses)
 
-    # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper)
+    # A4: 7D from contract (per ACTION_SCALE 顺序 dx/dy/dz/droll/dpitch/dyaw/gripper).
+    # Keep the 7-element form: the `normalize_action is None` dev-fallback below divides
+    # by action_scale[:6] (already correct). For the scripts/normalize_action.py branch
+    # (3-element [pos, rpy, gripper] convention) pass norm_scale3 so rpy uses
+    # ACTION_SCALE[3]=0.1, NOT ACTION_SCALE[1]=0.015 (which over-scaled rpy ~6.7x).
     action_scale = list(ACTION_SCALE)
+    norm_scale3 = [ACTION_SCALE[0], ACTION_SCALE[3], ACTION_SCALE[6]]
     pixels_placeholder = np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
 
     transitions = []
@@ -662,7 +689,7 @@ def replay_pure_fk(
             ]).astype(np.float32)
         else:
             action = normalize_action(
-                cartesian_deltas[i], action_scale, float(gripper_states[i])
+                cartesian_deltas[i], norm_scale3, float(gripper_states[i])
             )
         action = np.clip(action, -1.0, 1.0).astype(np.float32)
         if np.linalg.norm(action) <= 0.0:

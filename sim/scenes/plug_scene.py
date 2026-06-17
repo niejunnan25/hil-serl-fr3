@@ -60,6 +60,15 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+
+# Canonical PD gains shared with official_fr3_loader (native-fr3 stable_sim profile).
+from sim.assets.fr3_pd_gains import (
+    ARM_STIFFNESS,
+    ARM_DAMPING,
+    ARM_EFFORT_LIMIT_SIM,
+    GRIPPER_STIFFNESS,
+    GRIPPER_DAMPING,
+)
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg, SimulationContext
 
@@ -75,12 +84,16 @@ except ImportError:
 # ===========================================================================
 # Constants
 # ===========================================================================
-FR3_HOME_JOINTS = np.array([0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741])
-FR3_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "fr3.usd")
-# BULL GN-109K 6x五孔 power strip + its own 三脚 tail-cord plug (authored by
-# .planning/.../generate_gn109k_usd.py; repo-relative so the L1 gate stays clean).
-STRIP_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "cn_gn109k_strip.usd")
-PLUG_USD_PATH = str(pathlib.Path(__file__).resolve().parent.parent / "assets" / "cn_gn109k_plug.usd")
+from sim.data.contract import FR3_HOME_JOINTS as _FR3_HOME_JOINTS
+FR3_HOME_JOINTS = np.array(_FR3_HOME_JOINTS)
+# Canonical USD asset paths come from sim/assets/paths.py (single source of truth).
+# These were previously authored inline here; the constants are now re-exported so
+# existing references (FR3_USD_PATH / STRIP_USD_PATH / PLUG_USD_PATH) keep working.
+from sim.assets.paths import (
+    FR3_USD_PATH,
+    STRIP_USD_PATH,  # BULL GN-109K 6x五孔 power strip (fixed insertion target)
+    PLUG_USD_PATH,   # GN-109K 三脚 tail-cord plug (graspable)
+)
 
 TABLE_HEIGHT = 0.74              # metres
 TABLE_SIZE = (1.2, 0.8, 0.04)   # (x, y, z) metres
@@ -135,13 +148,14 @@ def _build_fr3_cfg(prim_path: str = "{ENV_REGEX_NS}/Robot") -> ArticulationCfg:
         actuators={
             "arm": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_joint[1-7]"],
-                stiffness=400.0,
-                damping=80.0,
+                effort_limit_sim=dict(ARM_EFFORT_LIMIT_SIM),
+                stiffness=ARM_STIFFNESS,
+                damping=ARM_DAMPING,
             ),
             "hand": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_finger_joint.*"],
-                stiffness=200.0,
-                damping=50.0,
+                stiffness=GRIPPER_STIFFNESS,
+                damping=GRIPPER_DAMPING,
             ),
         },
     )

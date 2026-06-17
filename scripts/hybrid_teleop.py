@@ -63,6 +63,17 @@ T_OFFSET_TRANS = np.array([0.0, 0.0, 0.1034])
 T_OFFSET_RZ_DEG = -45.0
 # franka_server /jointreset default home (flag reset_joint_target).
 RESET_JOINT_TARGET = np.array([0.0, 0.0, 0.0, -1.9, 0.0, 2.0, 0.0])
+XBOX_DZ = 0.08                      # Xbox stick deadzone (ignore rest-position drift)
+XBOX_ROT_STEP = 0.05                # rad/tick for D-pad pitch/roll + right-stick-X yaw
+XBOX_INSERT_REACH = 0.01           # m, A-button straight-down Z target below current (sustained push)
+XBOX_INSERT_CLIP = 0.009           # translational_clip_z while A held -> 2000*0.009=18N (seat the plug).
+                                   # Stays just below the ~20N default collision reflex, so NO threshold
+                                   # change is needed. For more force: run raise_collision.sh (Fz->40N) on
+                                   # the laptop, confirm "success: True", THEN raise this toward 0.0125 (25N).
+XBOX_HOLD_CLIP = 0.005             # default translational_clip (10N) — restored on A release; no reflex
+XBOX_SPIRAL_R = 0.003              # m, max X/Y spiral-search radius while A held (cover residual misalign)
+XBOX_SPIRAL_RATE = 0.001           # m/s spiral radius growth (reaches max in ~3s)
+XBOX_SPIRAL_W = 2.0 * np.pi * 0.7  # rad/s spiral angular speed (~0.7 Hz)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +109,54 @@ def home_reached(q, target=RESET_JOINT_TARGET, tol=0.15) -> bool:
     q = np.asarray(q, dtype=float).reshape(-1)[:7]
     target = np.asarray(target, dtype=float).reshape(-1)[:7]
     return bool(np.max(np.abs(q - target)) <= tol)
+
+
+def build_stop_cleanup_requests(currpos):
+    """Return the safe stop-cleanup requests in execution order.
+
+    Restore the low Z force cap before re-anchoring /pose. If Ctrl-C lands while
+    the Xbox A insert command is held, the previous implementation sent the hold
+    pose while the higher insert Z cap was still active, leaving one final high-force
+    impedance tick at exactly the stop boundary.
+    """
+    currpos = np.asarray(currpos, dtype=float).reshape(-1)[:7]
+    return [
+        ("update_param", {
+            "translational_clip_z": XBOX_HOLD_CLIP,
+            "translational_clip_neg_z": XBOX_HOLD_CLIP,
+        }),
+        ("pose", currpos.copy()),
+    ]
+
+
+def execute_stop_cleanup(session, url, get_current_pose, post_pose_fn, fallback_currpos=None, timeout=0.5):
+    """Best-effort stop cleanup: lower Z cap first, then hold current pose.
+
+    Lowering the insert Z cap is independent of pose refresh. Even if /getstate
+    times out during Ctrl-C, the next command must not leave the controller in the
+    elevated A-insert cap.
+    """
+    hold_clip = {
+        "translational_clip_z": XBOX_HOLD_CLIP,
+        "translational_clip_neg_z": XBOX_HOLD_CLIP,
+    }
+    try:
+        session.post(url.rstrip("/") + "/update_param", json=hold_clip, timeout=timeout)
+    except Exception:
+        pass
+
+    cp = None
+    try:
+        cp = np.asarray(get_current_pose(), dtype=float).reshape(-1)[:7]
+    except Exception:
+        if fallback_currpos is not None:
+            cp = np.asarray(fallback_currpos, dtype=float).reshape(-1)[:7]
+    if cp is None:
+        return
+    try:
+        post_pose_fn(session, url, cp, timeout=timeout)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +207,7 @@ def pose_delta(currpos, desired):
     return dxyz, dR.as_rotvec()
 
 
-def reset_to_home(session, url, home_pose, max_step=0.006, hz=10.0, timeout=45.0,
+def reset_to_home(session, url, home_pose, max_step=0.035, hz=10.0, timeout=90.0,
                   pos_tol=0.01, rot_tol=0.06):
     """CARTESIAN reset: interpolate the EE to home_pose (7D xyzw) via /pose on the
     already-running cartesian_impedance controller, clamped to max_step per tick.
@@ -171,17 +230,51 @@ def reset_to_home(session, url, home_pose, max_step=0.006, hz=10.0, timeout=45.0
     except Exception:
         pass
 
+    # Fast, responsive FREE-SPACE motion for the reset (the path to home is up/back, no
+    # contact): a bigger clip = more force = the arm actually keeps up with the moving
+    # target instead of crawling. run() restores the low insertion clip (0.005) afterwards.
+    try:
+        cfg = {"translational_stiffness": 2000.0}
+        for _ax in ("x", "y", "z"):
+            cfg["translational_clip_" + _ax] = 0.02
+            cfg["translational_clip_neg_" + _ax] = 0.02
+        session.post(url.rstrip("/") + "/update_param", json=cfg, timeout=8.0)
+    except Exception:
+        pass
+
+    # Open the gripper to the start state BEFORE lifting: releases any held/jammed plug at the
+    # socket so the arm returns home empty (not carrying it up then dropping it). /reset_gripper
+    # only resyncs the binary flag (leaves it CLOSED here — verified live); /open_gripper is what
+    # actually opens it (-> width ~1.0). Do both: resync then open.
+    try:
+        session.post(url.rstrip("/") + "/reset_gripper", json={}, timeout=8.0); time.sleep(1.5)
+        session.post(url.rstrip("/") + "/open_gripper", json={}, timeout=8.0); time.sleep(1.5)
+    except Exception:
+        pass
+
     home = np.asarray(home_pose, dtype=float).reshape(-1)[:7]
     dt = 1.0 / hz
     end = time.monotonic() + timeout
     currpos = None
+    stale = 0
     while time.monotonic() < end:
-        currpos = np.asarray(get_state(session, url, timeout=1.0)["pose"], dtype=float)
-        dxyz, drotvec = pose_delta(currpos, home)
-        if float(np.linalg.norm(dxyz)) < pos_tol and float(np.linalg.norm(drotvec)) < rot_tol:
-            return currpos
-        nextpos, _s, _r = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
-        post_pose(session, url, nextpos, timeout=1.0)
+        # Transient server hiccups must NOT abort the reset (that was the "exits before
+        # the reset finishes" bug) — skip the tick and keep going.
+        try:
+            currpos = np.asarray(get_state(session, url, timeout=2.0)["pose"], dtype=float)
+            dxyz, drotvec = pose_delta(currpos, home)
+            if float(np.linalg.norm(dxyz)) < pos_tol and float(np.linalg.norm(drotvec)) < rot_tol:
+                return currpos
+            nextpos, _s, _r = apply_cartesian_delta(currpos, dxyz, drotvec, max_step)
+            post_pose(session, url, nextpos, timeout=2.0)
+            stale = 0
+        except Exception:
+            stale += 1
+            if stale % 10 == 0:
+                try:
+                    session.post(url.rstrip("/") + "/clearerr", json={}, timeout=5.0)
+                except Exception:
+                    pass
         time.sleep(dt)
     perr = float(np.linalg.norm(pose_delta(currpos, home)[0])) if currpos is not None else -1.0
     raise RuntimeError(f"cartesian reset timeout; remaining pos err {perr:.3f} m")
@@ -261,7 +354,7 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
     signal.signal(signal.SIGTERM, _sig)
 
     session = _session()
-    gello_dev = cam_side = cam_wrist = hub = xbox = fk = None
+    gello_dev = cam_side = cam_wrist = hub = fk = None
     obs_list: List[dict] = []
     action_list: List[np.ndarray] = []
     raw = {k: [] for k in ("pose", "q", "force", "torque", "gripper_pos",
@@ -284,11 +377,11 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
         # open/close becomes a no-op — the "gripper stopped working" bug). /reset_gripper
         # re-homes it open + resyncs, so the GELLO/Xbox gripper edges work reliably.
         try:
-            session.post(server.rstrip("/") + "/reset_gripper", json={}, timeout=8.0)
-            time.sleep(2.0)
+            session.post(server.rstrip("/") + "/reset_gripper", json={}, timeout=8.0); time.sleep(1.5)
+            session.post(server.rstrip("/") + "/open_gripper", json={}, timeout=8.0); time.sleep(1.5)
         except Exception:
             pass
-        gripper_closed = False  # reset_gripper leaves the gripper OPEN
+        gripper_closed = False  # reset_gripper resyncs the flag; open_gripper actually opens it
 
         # Contact compliance for insertion: cap the per-axis position error
         # (translational_clip) so the stiff (2000 N/m) impedance can't build more than
@@ -308,23 +401,13 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
         gello_dev = DynamixelDriver(list(range(8)), port="/dev/ttyUSB0", baudrate=57600,
                                     max_retries=1, use_fake_fallback=False)
 
-        import gymnasium as gym
         from teleop_hub import TeleopDeviceHub
-        from xbox_intervention import XboxIntervention
-
-        class _Env(gym.Env):
-            def __init__(self):
-                self.action_space = gym.spaces.Box(-1.0, 1.0, (7,), np.float32)
-                self.observation_space = gym.spaces.Box(-np.inf, np.inf, (7,), np.float32)
-
-            def reset(self, *, seed=None, options=None):
-                return np.zeros(7, np.float32), {}
-
-            def step(self, action):
-                return np.zeros(7, np.float32), 0.0, False, False, {}
 
         hub = TeleopDeviceHub(backend="pygame")
-        xbox = XboxIntervention(_Env(), hub, max_step=max_step, pos_scale=pos_scale)
+        if not hub.available:
+            print("[WARN] Xbox hub UNAVAILABLE (pygame missing or no controller detected). "
+                  "Xbox takeover will NOT move the arm — check the env python has pygame and "
+                  "the controller is connected/awake.", flush=True)
 
         print("[init] opening ZED cameras (threaded)...", flush=True)
         cam_side = _ThreadedZED(SIDE_SERIAL, fps=fps)
@@ -347,6 +430,10 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
         q0_robot = np.asarray(get_state(session, server, timeout=CTRL_T)["q"], dtype=float)
         mode = "gello"
         toggle_prev = False
+        insert_prev = False                                      # Xbox A-button (fine insert) edge state
+        insert_ticks = 0                                         # ticks A has been held (spiral-search clock)
+        ins_cx0 = ins_cy0 = ins_x = ins_y = 0.0                  # spiral-search anchor + current X/Y target
+        z_target = float(np.asarray(s0["pose"], dtype=float)[2])  # Xbox Z latch; re-anchored on switch to xbox
 
         t_start = time.monotonic()
         end = t_start + duration
@@ -368,8 +455,11 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
                     if mode == "gello":  # re-anchor on takeover back to GELLO
                         raw_gello0 = raw_g
                         q0_robot = np.asarray(state["q"], dtype=float)
+                    else:                # switched to xbox -> latch Z at current height
+                        z_target = float(currpos[2])
 
                 gcmd = None
+                insert_now = False              # set True only in xbox A-insert; keeps it bound in gello mode
                 if mode == "gello":
                     q_target = gello_joint_target(raw_g, raw_gello0, q0_robot,
                                                   DEFAULT_JOINT_SIGNS, leader_scale)
@@ -377,13 +467,55 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
                     dxyz, drotvec = pose_delta(currpos, desired)
                     gcmd, gripper_closed = gripper_edge(
                         float(raw_g[7]), gripper_closed, GRIPPER_CLOSE_BELOW, GRIPPER_OPEN_ABOVE)
-                else:  # xbox — GELLO ignored entirely
-                    if not st.rb:
+                else:  # xbox — GELLO ignored. LEFT stick=X/Y, RIGHT stick=Z(up/down,latched)
+                    # +yaw(L/R), D-pad=pitch/roll, RT=close / LT=open. Direct mapping — the old
+                    # xbox_intervention._state_to_action posted /pose but never moved the arm
+                    # (live 2026-06-15); directions + latched Z verified live the same day.
+                    # A (with RB) = fine straight-down insertion: sustained Z-down + raise the Z
+                    # contact-force cap so the plug seats (the 10N hold-cap stalls partway in —
+                    # "插一半就推不动了"). Edge-trigger the clip change (one POST per press/release).
+                    insert_now = bool(st.rb and st.a)
+                    if insert_now and not insert_prev:
+                        ins_cx0 = float(currpos[0]); ins_cy0 = float(currpos[1]); insert_ticks = 0
+                        try:
+                            session.post(server.rstrip("/") + "/update_param",
+                                         json={"translational_clip_z": XBOX_INSERT_CLIP,
+                                               "translational_clip_neg_z": XBOX_INSERT_CLIP}, timeout=0.5)
+                        except Exception:
+                            pass
+                    elif insert_prev and not insert_now:
+                        try:
+                            session.post(server.rstrip("/") + "/update_param",
+                                         json={"translational_clip_z": XBOX_HOLD_CLIP,
+                                               "translational_clip_neg_z": XBOX_HOLD_CLIP}, timeout=0.5)
+                        except Exception:
+                            pass
+                    insert_prev = insert_now
+                    if not st.rb:                          # RB deadman: no motion unless held
                         dxyz = np.zeros(3); drotvec = np.zeros(3)
                     else:
-                        action = xbox._state_to_action(st)
-                        dxyz = np.asarray(action[:3], float) * pos_scale
-                        drotvec = np.asarray(action[3:6], float) * rpy_scale
+                        lx = 0.0 if abs(st.left_x) < XBOX_DZ else st.left_x
+                        ly = 0.0 if abs(st.left_y) < XBOX_DZ else st.left_y
+                        ry = 0.0 if abs(st.right_y) < XBOX_DZ else st.right_y
+                        rxx = 0.0 if abs(st.right_x) < XBOX_DZ else st.right_x
+                        dxy = np.array([-ly, lx]) * max_step   # up/down->+X/-X (fwd/back), L/R->Y
+                        nrm = float(np.linalg.norm(dxy))
+                        if nrm > max_step:
+                            dxy *= max_step / nrm
+                        rz = -ry * max_step
+                        if rz != 0.0:                      # right stick up/down -> relative Z (released: latched)
+                            z_target = currpos[2] + rz
+                        if insert_now:                     # A: straight-down at 15N + X/Y spiral search
+                            insert_ticks += 1
+                            th = insert_ticks * dt
+                            rr = min(XBOX_SPIRAL_R, XBOX_SPIRAL_RATE * th)
+                            ang = XBOX_SPIRAL_W * th
+                            ins_x = ins_cx0 + rr * float(np.cos(ang))
+                            ins_y = ins_cy0 + rr * float(np.sin(ang))
+                            z_target = currpos[2] - XBOX_INSERT_REACH
+                        dxyz = np.array([dxy[0], dxy[1], 0.0])  # Z applied via z_target override below
+                        # orientation: D-pad=roll(X)/pitch(Y), right-stick-X=yaw(Z); rotvec, relative
+                        drotvec = np.array([st.dpad_x, -st.dpad_y, rxx]) * XBOX_ROT_STEP
                     if st.rt > 0.5 and not gripper_closed:
                         gcmd = "close"; gripper_closed = True
                     elif st.lt > 0.5 and gripper_closed:
@@ -391,8 +523,12 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
 
                 nextpos, _step, applied_drot = apply_cartesian_delta(
                     currpos, dxyz, drotvec, max_step)
+                if mode == "xbox":
+                    if insert_now:                    # A: spiral-search X/Y around the anchor
+                        nextpos[0] = ins_x; nextpos[1] = ins_y
+                    nextpos[2] = z_target             # latch Z (hold height; right stick moves z_target)
                 applied_dxyz = nextpos[:3] - currpos[:3]
-                gripper_pm = 1.0 if gripper_closed else -1.0
+                gripper_pm = -1.0 if gripper_closed else 1.0
                 action = normalize_action(applied_dxyz, applied_drot, gripper_pm)
 
                 sf = cam_side.latest(); wf = cam_wrist.latest()
@@ -453,13 +589,28 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, fps, dry_run,
             if sleep > 0:
                 time.sleep(sleep)
     finally:
-        if not dry_run and last_currpos is not None:
+        if not dry_run:
+            # clearerr: if a collision reflex is active, the controller is frozen
+            # and silently ignores /pose.  Clear first so the hold-pose is applied.
             try:
-                cp = np.asarray(get_state(session, server, timeout=CTRL_T)["pose"], float)
-                post_pose(session, server, cp, timeout=CTRL_T)
-                print(f"[REC] re-anchored to currpos {np.round(cp[:3], 4).tolist()}", flush=True)
-            except Exception as e:
-                print(f"[WARN] re-anchor failed: {type(e).__name__}", flush=True)
+                session.post(server.rstrip("/") + "/clearerr", json={}, timeout=0.5)
+            except Exception:
+                pass
+            def _current_pose():
+                return np.asarray(get_state(session, server, timeout=CTRL_T)["pose"], float)
+
+            execute_stop_cleanup(
+                session,
+                server,
+                get_current_pose=_current_pose,
+                post_pose_fn=post_pose,
+                fallback_currpos=last_currpos,
+                timeout=CTRL_T,
+            )
+            if last_currpos is not None:
+                print(f"[REC] stop cleanup done, last known pose {np.round(last_currpos[:3], 4).tolist()}", flush=True)
+            else:
+                print("[REC] stop cleanup done (no pose recorded this episode)", flush=True)
         for dev in (gello_dev,):
             try:
                 dev and dev.close()
@@ -503,7 +654,9 @@ def main(argv=None):
     p.add_argument("--out-dir", default="/home/robot/hilserl-fr3/demos/hybrid")
     p.add_argument("--hz", type=float, default=10.0)
     p.add_argument("--duration", type=float, default=600.0)
-    p.add_argument("--max-step", type=float, default=DEFAULT_MAX_STEP)
+    p.add_argument("--max-step", type=float, default=0.02,
+                   help="per-tick Cartesian translation cap (m); 0.02 at 10Hz is 20cm/s. "
+                        "Use a smaller value for unusually tight setups.")
     p.add_argument("--leader-scale", type=float, default=DEFAULT_LEADER_SCALE)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--dry-run", action="store_true")

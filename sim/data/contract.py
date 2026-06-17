@@ -23,6 +23,19 @@ CONTRACT_VERSION = "v2.1-real-2026-06-11"
 # 顺序: (dx, dy, dz, droll, dpitch, dyaw, gripper)
 ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0)
 
+# FR3 7-DoF 臂 home/reset 关节构型（弧度）——sim 端 replay/reset 起始位姿的
+# single source of truth。plug_scene.FR3_HOME_JOINTS 与 gello_replay.FR3_HOME_JOINTS
+# 必须 import 此常量（用 np.array(...) 包装）。
+# 存为纯 tuple（不引入 numpy）以满足本模块 L1 零外部 import 约束。
+#
+# 注意：此 'bent' 位姿 (TCP @ z≈0.3855, 经 sim/kinematics/fr3_fk.fk_ee_pose 验证)
+# 与 official_fr3_loader._FR3_DEFAULT_HOME 的 USD spawn 位姿
+# [0,0,0,-pi/2,0,pi/2,0] (TCP @ z≈0.5211, 上游 RobotEnv.reset_joints)
+# 是两个不同的位姿、不同用途：前者是逐次 reset/replay 下发的命令位姿，
+# 后者是 articulation 的 USD 初始 spawn 位姿。二者当前 DISAGREE 且各自合理，
+# 故此处只统一 sim 端 replay home，不覆盖 loader 的 spawn 位姿。
+FR3_HOME_JOINTS = (0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741)
+
 # 25D state — ordered concatenation keys.
 # Source of truth: experiments/plug_insertion/config.py:237
 #   proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
@@ -67,7 +80,10 @@ IMAGE_KEY_ALIAS_MAP = {
 }
 
 # Episode
-MAX_EPISODE_LENGTH = 150
+# Align with experiments/plug_insertion/config.py:MAX_EPISODE_LENGTH = 300
+# (raised from 150: demo insertion segments are 226-1009 steps, median 365;
+#  150 was too short for the insert+search phase, 300 allows search without runaway).
+MAX_EPISODE_LENGTH = 300
 
 # Transition dict top-level keys
 TRANSITION_KEYS = (

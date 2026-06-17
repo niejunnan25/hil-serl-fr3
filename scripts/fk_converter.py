@@ -52,9 +52,9 @@ _FR3_DH = np.array([
     [0.088,    np.pi / 2,  0.0,     0.0],
 ], dtype=np.float64)
 
-# EE flange offset (panda_hand_joint): d=0.1034 along z, rotation pi/4 about z
+# EE flange offset (panda_hand_joint): d=0.1034 along z, rotation -pi/4 about z
 _EE_D = 0.1034
-_EE_ROT_OFFSET = np.pi / 4
+_EE_ROT_OFFSET = -np.pi / 4
 
 
 def _dh_transform(a: float, alpha: float, d: float, theta: float) -> np.ndarray:

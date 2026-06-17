@@ -35,6 +35,9 @@ _DH = np.array([
 _FLANGE_D = 0.107   # d8 along z
 # TCP offset (Franka Hand) — fixed from flange to fr3_hand_tcp
 _TCP_D = 0.1034
+# TCP flange Rz rotation (F_T_EE orientation): matches the live/pinocchio-
+# validated hybrid_teleop.CorrectFK T_OFFSET_RZ_DEG = -45.0 (deg).
+_TCP_RZ = -np.pi / 4
 
 
 def _dh_transform(a: float, d: float, alpha: float, theta: float) -> np.ndarray:
@@ -77,6 +80,10 @@ def fk_ee_pose(q: np.ndarray, *, include_tcp: bool = True) -> np.ndarray:
     if include_tcp:
         tcp = np.eye(4)
         tcp[2, 3] = _TCP_D
+        # Franka-hand flange->TCP fixed Rz(-45deg) (F_T_EE orientation),
+        # matching hybrid_teleop.CorrectFK T_OFFSET_RZ_DEG = -45.0 (live-validated).
+        c, s = np.cos(_TCP_RZ), np.sin(_TCP_RZ)
+        tcp[:3, :3] = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
         T = T @ tcp
 
     return T

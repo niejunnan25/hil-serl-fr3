@@ -47,7 +47,7 @@ ANGLE_TOLERANCE_RAD = math.radians(ANGLE_TOLERANCE_DEG)
 # 插座位姿 (与 plug_insertion_scene.py / isaac_lab_scene_config.py 一致)
 # 在 sim 中, 插座固定在桌面上已知位置
 # 如果不同场景, 通过 CLI --socket-pos/--socket-rot 参数覆盖
-DEFAULT_SOCKET_POS = np.array([0.5, 0.0, 0.02])  # (x, y, z) world frame
+DEFAULT_SOCKET_POS = np.array([0.12, 0.0, 0.74])  # (x, y, z) world frame
 DEFAULT_SOCKET_QUAT = np.array([1.0, 0.0, 0.0, 0.0])  # (w, x, y, z) identity
 
 
@@ -215,13 +215,17 @@ def estimate_tcp_from_state(
 
     注: 如果 gello_replay.py 记录了完整 EE pose, 应直接使用。
     """
-    # 用关节位置的加权和作为 TCP 位置估计 (简化)
-    # 实际项目中应通过 FK 从 joints 计算精确 EE pose
-    joints = state[:7]
-    # 简化: 假设 TCP 接近最后一个关节 (需要实际 FK)
-    # 这里返回一个基于 joint state 的近似
-    tcp_pos = socket_pos.copy()  # placeholder — 需要场景特定逻辑
-    tcp_quat = np.array([1.0, 0.0, 0.0, 0.0])  # placeholder
+    # state 由 gello_replay.capture_observation 产出, 25D, 按
+    # contract.STATE_KEYS_ORDERED 拼接: tcp_pose(7)=pos(3)+quat_xyzw(4),
+    # 之后是 tcp_vel(6)/tcp_force(3)/tcp_torque(3)/gripper_pose(6)。
+    # 因此 state[0:3] 直接就是 world-frame TCP 位置, 不需要 FK 近似。
+    state = np.asarray(state, dtype=np.float64)
+    tcp_pos = state[0:3].copy()
+    # tcp_quat: state[3:7] 由 gello_replay 以 xyzw (scalar-last) 写入,
+    # 而 check_insertion 约定 [w,x,y,z] (scalar-first), 转换 convention 后返回,
+    # 使角度对齐判定基于真实 TCP 朝向而非 identity 占位。
+    qx, qy, qz, qw = state[3:7]
+    tcp_quat = np.array([qw, qx, qy, qz], dtype=np.float64)
     return tcp_pos, tcp_quat
 
 

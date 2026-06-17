@@ -60,11 +60,12 @@ from normalize_action import normalize_action
 # ---------------------------------------------------------------------------
 DEFAULT_MAX_STEP = 0.003        # 单步最大 Cartesian delta (meters)
 DEFAULT_MAX_TOTAL_DELTA = 0.03  # 累积最大 Cartesian delta (meters)
+DEFAULT_MAX_ROT_STEP = 0.1      # 单步最大旋转 delta (radians, = rpy_scale, 与 relative_teleop 一致)
 DEFAULT_HZ = 10                 # 控制频率 (与 HIL-SERL 一致)
 
 # 默认 action scale (与 convert_to_zarr.py 一致)
-DEFAULT_POS_SCALE = 0.1         # xyz 归一化分母 (meters)
-DEFAULT_RPY_SCALE = 0.2         # roll/pitch/yaw 归一化分母 (radians)
+DEFAULT_POS_SCALE = 0.015       # xyz 归一化分母 (meters)
+DEFAULT_RPY_SCALE = 0.1         # roll/pitch/yaw 归一化分母 (radians)
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +78,15 @@ class GelloCartesianDeltaAgent:
     喂入 HIL-SERL env.step()。
 
     安全机制:
-        - max_step: 单步最大 Cartesian delta (translation norm, meters)
-        - max_total_delta: 累积最大 Cartesian delta (translation norm, meters)
+        - max_step: 单步最大平移 Cartesian delta (translation norm, meters)
+        - max_total_delta: 累积最大平移 Cartesian delta (translation norm, meters)
+        - max_rot_step: 单步最大旋转 delta (||rpy|| norm, radians)
         - 超限时返回零动作并记录警告
 
     Attributes:
-        max_step: 单步最大 Cartesian delta (meters)
-        max_total_delta: 累积最大 Cartesian delta (meters)
+        max_step: 单步最大平移 Cartesian delta (meters)
+        max_total_delta: 累积最大平移 Cartesian delta (meters)
+        max_rot_step: 单步最大旋转 delta (radians)
         pos_scale: xyz 归一化分母
         rpy_scale: rpy 归一化分母
         prev_joints: 上一步关节位置 (7,)
@@ -98,19 +101,22 @@ class GelloCartesianDeltaAgent:
         max_total_delta: float = DEFAULT_MAX_TOTAL_DELTA,
         pos_scale: float = DEFAULT_POS_SCALE,
         rpy_scale: float = DEFAULT_RPY_SCALE,
+        max_rot_step: float = DEFAULT_MAX_ROT_STEP,
     ):
         """初始化 Agent。
 
         Args:
-            max_step: 单步最大 Cartesian delta (meters), 默认 0.003
-            max_total_delta: 累积最大 Cartesian delta (meters), 默认 0.03
+            max_step: 单步最大平移 Cartesian delta (meters), 默认 0.003
+            max_total_delta: 累积最大平移 Cartesian delta (meters), 默认 0.03
             pos_scale: xyz 归一化分母, 默认 0.1
             rpy_scale: rpy 归一化分母, 默认 0.2
+            max_rot_step: 单步最大旋转 delta (radians, ||rpy|| 范数), 默认 0.1
         """
         self.max_step = max_step
         self.max_total_delta = max_total_delta
         self.pos_scale = pos_scale
         self.rpy_scale = rpy_scale
+        self.max_rot_step = max_rot_step
 
         # 状态
         self.prev_joints: Optional[np.ndarray] = None
@@ -201,6 +207,16 @@ class GelloCartesianDeltaAgent:
                 f"(step {self.step_count})"
             )
 
+        # 单步检查: rotation norm (||rpy||). 一次 GELLO 猛拽 / 丢帧 / stale-prev
+        # 可以在平移很小的情况下合成任意大的姿态跳变, 平移 cap 不会拦住它。
+        rot_delta_norm = float(np.linalg.norm(cartesian_delta[3:6]))
+        if safe and rot_delta_norm > self.max_rot_step:
+            safe = False
+            violation = (
+                f"max_rot_step exceeded: {rot_delta_norm:.6f} > {self.max_rot_step} "
+                f"(step {self.step_count})"
+            )
+
         # ------------------------------------------------------------------
         # 4. 安全策略: 超限时返回零动作
         # ------------------------------------------------------------------
@@ -215,6 +231,7 @@ class GelloCartesianDeltaAgent:
                 "safe": False,
                 "step_delta_norm": step_delta_norm,
                 "total_delta_norm": total_delta_norm,
+                "rot_delta_norm": rot_delta_norm,
                 "violation": violation,
             }
             return action, info
@@ -241,6 +258,7 @@ class GelloCartesianDeltaAgent:
             "safe": True,
             "step_delta_norm": step_delta_norm,
             "total_delta_norm": total_delta_norm,
+            "rot_delta_norm": rot_delta_norm,
             "violation": "",
         }
 
@@ -257,6 +275,7 @@ class GelloCartesianDeltaAgent:
             "violation_count": self.violation_count,
             "max_step": self.max_step,
             "max_total_delta": self.max_total_delta,
+            "max_rot_step": self.max_rot_step,
             "pos_scale": self.pos_scale,
             "rpy_scale": self.rpy_scale,
             "initialized": self.prev_joints is not None,
@@ -276,6 +295,7 @@ def dry_run(args: argparse.Namespace) -> None:
     """
     max_step = args.max_step
     max_total_delta = args.max_total_delta
+    max_rot_step = args.max_rot_step
     pos_scale = args.pos_scale
     rpy_scale = args.rpy_scale
     hz = args.hz
@@ -284,6 +304,7 @@ def dry_run(args: argparse.Namespace) -> None:
     agent = GelloCartesianDeltaAgent(
         max_step=max_step,
         max_total_delta=max_total_delta,
+        max_rot_step=max_rot_step,
         pos_scale=pos_scale,
         rpy_scale=rpy_scale,
     )
@@ -380,6 +401,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MAX_TOTAL_DELTA,
         help=f"Max cumulative Cartesian delta in meters (default: {DEFAULT_MAX_TOTAL_DELTA})",
+    )
+    parser.add_argument(
+        "--max-rot-step",
+        type=float,
+        default=DEFAULT_MAX_ROT_STEP,
+        help=f"Max per-step rotation delta in radians (default: {DEFAULT_MAX_ROT_STEP})",
     )
 
     # Action scale

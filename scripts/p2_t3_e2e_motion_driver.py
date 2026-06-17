@@ -69,14 +69,30 @@ def _require_approval() -> None:
         sys.exit(5)
 
 
-def _open_gello(port: str, baudrate: int):
-    """Try to open the real GELLO. If unavailable, fall back to a
-    deterministic synthetic stream so dry-run / micro can still
-    exercise the safety path on machines without /dev/ttyUSB0.
+class GelloUnavailableError(RuntimeError):
+    """Raised when the real GELLO cannot be opened and synthesis is
+    not permitted (i.e. --full motion mode)."""
+
+
+def _open_gello(port: str, baudrate: int, require_real: bool = False):
+    """Open the real GELLO. In dry-run / micro (require_real=False) fall back
+    to a deterministic synthetic stream so the safety path can be exercised on
+    machines without /dev/ttyUSB0.
+
+    In --full motion mode (require_real=True) a synthetic stream must NEVER be
+    fabricated: it would drive a fake trajectory onto the REAL robot via
+    POST /pose. On any import/open failure we raise GelloUnavailableError so
+    the caller aborts before commanding the robot, and we disable the gello
+    library's own fake fallback so a fake leader cannot masquerade as real.
     """
     try:
         from gello.dynamixel.driver import DynamixelDriver
     except ImportError:
+        if require_real:
+            raise GelloUnavailableError(
+                "real GELLO unavailable (gello driver not importable); refusing "
+                "to synthesize a leader trajectory for --full motion"
+            )
         return _SyntheticDriver()
 
     try:
@@ -85,10 +101,17 @@ def _open_gello(port: str, baudrate: int):
             port=port,
             baudrate=baudrate,
             max_retries=1,
-            use_fake_fallback=True,  # never hard-fail
+            # In full mode we must talk to the REAL leader: a gello-internal
+            # fake fallback would silently stream a fabricated trajectory.
+            use_fake_fallback=not require_real,
         )
         return d
     except Exception as e:  # pragma: no cover - hardware path
+        if require_real:
+            raise GelloUnavailableError(
+                f"real GELLO open failed at {port}: {e}; refusing to "
+                "synthesize a leader trajectory for --full motion"
+            )
         print(f"[WARN] gello open failed: {e}; using synthetic stream")
         return _SyntheticDriver()
 
@@ -177,6 +200,34 @@ def _post(url: str, route: str, body: dict, timeout: float = 5.0):
         return {}
 
 
+def _hold_pose(server_url: str, pose, log_fp, timeout: float = 1.0) -> None:
+    """Best-effort safety hold: re-anchor the impedance setpoint to `pose`.
+
+    franka_server is a Cartesian-impedance controller with NO /stop route - the
+    arm servos to the last commanded /pose and stays there. The repo's proven
+    stop-cleanup idiom (hybrid_teleop.execute_stop_cleanup) is therefore "clear,
+    then re-POST the current pose to hold" rather than a velocity-zero/abort.
+    On any abnormal loop exit (server /pose reject, safety violation, Ctrl-C) we
+    re-issue that hold so the setpoint equals where the arm actually is, instead
+    of leaving a stale forward target the impedance would still chase. Every call
+    is wrapped: if the server is already gone, the impedance hold is the fallback.
+    """
+    if pose is None:
+        log_fp.write("[FULL] hold skipped: no pose anchor available\n")
+        log_fp.flush()
+        return
+    try:
+        _post(server_url, "/clearerr", {}, timeout=timeout)
+        _post(server_url, "/pose", {"arr": [float(x) for x in pose]}, timeout=timeout)
+        log_fp.write(
+            f"[FULL] safety hold: re-anchored /pose to "
+            f"{np.round(np.asarray(pose, dtype=float)[:3], 4).tolist()}\n"
+        )
+    except Exception as e:  # best-effort; impedance already holds last setpoint
+        log_fp.write(f"[FULL] safety hold POST failed (impedance holds last setpoint): {e}\n")
+    log_fp.flush()
+
+
 def _send_full(
     agent: GelloCartesianDeltaAgent, driver, hz: float, duration: float,
     server_url: str, log_fp,
@@ -231,28 +282,45 @@ def _send_full(
     dt = 1.0 / hz
     end = time.monotonic() + duration
     tick = 0
-    while time.monotonic() < end:
-        raw = driver.get_joints()
-        target, abs_pose, ok, info = follower.step(raw)
-        log_fp.write(
-            f"[FULL] t={tick} step={info['step_delta']:.6f} "
-            f"total={info['total_delta']:.6f} safe={ok}\n"
-        )
-        if not ok:
-            log_fp.write(f"[FULL] safety violation: {info['violation']}\n")
-            log_fp.flush()
-            return 8
-        try:
-            _post(server_url, "/clearerr", {})
-            _post(server_url, "/pose", {"arr": [float(x) for x in abs_pose]})
-        except Exception as e:
-            log_fp.write(f"[FULL] server rejected /pose: {e}\n")
-            log_fp.flush()
-            return 9
-        tick += 1
-        time.sleep(dt)
+    # last_pose anchors the safety hold: the last setpoint the arm is actually
+    # tracking. Seed with currpos so a hold is possible even before tick 0.
+    last_pose = currpos
+    rc = 0
+    try:
+        while time.monotonic() < end:
+            raw = driver.get_joints()
+            target, abs_pose, ok, info = follower.step(raw)
+            log_fp.write(
+                f"[FULL] t={tick} step={info['step_delta']:.6f} "
+                f"total={info['total_delta']:.6f} safe={ok}\n"
+            )
+            if not ok:
+                log_fp.write(f"[FULL] safety violation: {info['violation']}\n")
+                log_fp.flush()
+                rc = 8
+                break
+            try:
+                _post(server_url, "/clearerr", {})
+                _post(server_url, "/pose", {"arr": [float(x) for x in abs_pose]})
+                last_pose = abs_pose
+            except Exception as e:
+                log_fp.write(f"[FULL] server rejected /pose: {e}\n")
+                log_fp.flush()
+                rc = 9
+                break
+            tick += 1
+            time.sleep(dt)
+    except KeyboardInterrupt:
+        log_fp.write("[FULL] KeyboardInterrupt - holding current pose\n")
+        log_fp.flush()
+        rc = 10
+    finally:
+        # On every exit (normal, reject, safety violation, Ctrl-C) re-anchor the
+        # impedance setpoint to the last good pose so the arm holds instead of
+        # chasing a stale forward target. Best-effort; never masks rc.
+        _hold_pose(server_url, last_pose, log_fp)
     log_fp.flush()
-    return 0
+    return rc
 
 
 def main() -> int:
@@ -264,6 +332,12 @@ def main() -> int:
     p.add_argument("--hz", type=float, default=10.0)
     p.add_argument("--duration", type=float, default=5.0)
     p.add_argument("--log", required=True)
+    # TEST-ONLY: allow the deterministic synthetic leader in --full so the
+    # HTTP/FK/bias contract can be exercised against a MOCK server without real
+    # GELLO hardware. The shell harness (16_gello_e2e_motion_test.sh) NEVER
+    # passes this, so a real --full run still aborts on GELLO failure (rc 12).
+    p.add_argument("--allow-synthetic-leader", action="store_true",
+                   help=argparse.SUPPRESS)
     args = p.parse_args()
 
     if not _AGENT_AVAILABLE:
@@ -276,7 +350,17 @@ def main() -> int:
             print("[ERR] requests not installed; cannot run --full", file=sys.stderr)
             return 4
 
-    driver = _open_gello(args.gello_port, baudrate=57600)
+    # In --full the leader trajectory reaches the REAL robot via POST /pose,
+    # so a synthetic fallback is forbidden: a GELLO failure must abort here.
+    try:
+        driver = _open_gello(
+            args.gello_port,
+            baudrate=57600,
+            require_real=(args.mode == "full" and not args.allow_synthetic_leader),
+        )
+    except GelloUnavailableError as e:
+        print(f"[ERR] {e}", file=sys.stderr)
+        return 12
     agent = GelloCartesianDeltaAgent(
         max_step=MAX_STEP,
         max_total_delta=MAX_TOTAL_DELTA,

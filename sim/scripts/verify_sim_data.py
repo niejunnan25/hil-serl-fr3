@@ -16,13 +16,13 @@ from __future__ import annotations
 import argparse
 import pickle
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
 from sim.data.contract import (
     IMAGE_DTYPE, IMAGE_SHAPE, IMAGE_KEY_ALIAS_MAP,
-    STATE_DIMS, STATE_DTYPE, STATE_KEYS_ORDERED,
+    STATE_DIMS, STATE_DTYPE, STATE_KEYS_ORDERED, STATE_KEY_DIMS,
     TRANSITION_KEYS, VALID_PKL_IMAGE_KEYS,
 )
 
@@ -45,18 +45,33 @@ def _expected_state_subkeys() -> tuple[str, ...]:
 _EXPECTED_SUBKEY_COUNT = 5  # tcp_pose, tcp_vel, tcp_force, tcp_torque, gripper_pose
 
 
-def verify_state_keys_order(state_vector: np.ndarray) -> bool:
+def verify_state_keys_order(
+    state_vector: np.ndarray,
+    segments: Mapping[str, Any] | None = None,
+) -> bool:
     """验证 state_vector 拼接顺序与 STATE_KEYS_ORDERED 一致.
 
     A10 contract (codex #2 fix): state 必须是 STATE_KEYS_ORDERED 顺序拼接的 1D vector.
-    本函数显式 use STATE_KEYS_ORDERED 验证:
+
+    本函数分两层验证:
       (a) shape = (STATE_DIMS,)
       (b) dtype = STATE_DTYPE (float32)
       (c) STATE_KEYS_ORDERED 长度 = _EXPECTED_SUBKEY_COUNT (5 个 sub-key)
-      (d) state_vector 的总 dim 与 STATE_KEYS_ORDERED 拼接 sum 一致
+      (d) 所有 sub-key 名称非空
+      (e) contract layout 自洽: len(STATE_KEY_DIMS) == len(STATE_KEYS_ORDERED)
+          且 sum(STATE_KEY_DIMS) == STATE_DIMS (拼接边界 must reconstruct 25D)
+
+    当调用方提供 ``segments`` (producer 的 slice layout, 即 key -> sub-array
+    映射) 时, 额外做"真顺序"校验 (codex #2 的本意):
+      (f1) segments 的 key 顺序必须 *逐项等于* STATE_KEYS_ORDERED;
+      (f2) 每个 sub-segment 的长度必须等于对应的 STATE_KEY_DIMS;
+      (f3) 按 STATE_KEYS_ORDERED 顺序 concat 各 segment 后必须逐元素等于
+           ``state_vector`` (即 producer 的拼接顺序/数据未被打乱).
+    任何一项不满足返回 False —— 因此一个 reordered state (子块换位) 会被捕获,
+    而非旧实现里的静默 pass。
 
     Arith 矛盾 (20 vs 25) 保留在 contract.py docstring 与 VERIFY.md A2 段;
-    本函数不参与 arith 校验, 只验"顺序"语义 (即合同 schema)。
+    flat 路径不参与 arith 校验, 只验 schema/layout 自洽。
     """
     # (a) shape check
     if state_vector.shape != (STATE_DIMS,):
@@ -67,10 +82,32 @@ def verify_state_keys_order(state_vector: np.ndarray) -> bool:
     # (c) STATE_KEYS_ORDERED 长度 check (实 ordered 拼接到 25D 应有 5 个 sub-key)
     if len(STATE_KEYS_ORDERED) != _EXPECTED_SUBKEY_COUNT:
         return False
-    # (d) 显式 use STATE_KEYS_ORDERED 拼接 (不用 hardcode 5)
-    #     验证所有 sub-key 名称都不为空 (即不是空 tuple / 空 string)
+    # (d) 验证所有 sub-key 名称都不为空 (即不是空 tuple / 空 string)
     for key in STATE_KEYS_ORDERED:
         if not isinstance(key, str) or not key:
+            return False
+    # (e) contract layout 自洽: per-key dims 必须与 keys 对齐且 sum == STATE_DIMS
+    if len(STATE_KEY_DIMS) != len(STATE_KEYS_ORDERED):
+        return False
+    if sum(STATE_KEY_DIMS) != STATE_DIMS:
+        return False
+    # (f) 若 producer 提供了 slice layout, 做真正的逐段 ORDER + 边界校验
+    if segments is not None:
+        # (f1) key 顺序必须逐项等于 STATE_KEYS_ORDERED (子块换位即 fail)
+        if tuple(segments.keys()) != tuple(STATE_KEYS_ORDERED):
+            return False
+        rebuilt = []
+        for key, expected_dim in zip(STATE_KEYS_ORDERED, STATE_KEY_DIMS):
+            seg = np.asarray(segments[key]).reshape(-1)
+            # (f2) 每段长度必须等于 STATE_KEY_DIMS
+            if seg.shape[0] != expected_dim:
+                return False
+            rebuilt.append(seg)
+        concat = np.concatenate(rebuilt).astype(np.dtype(STATE_DTYPE))
+        # (f3) 按顺序拼接后必须逐元素等于 state_vector
+        if concat.shape != (STATE_DIMS,):
+            return False
+        if not np.array_equal(concat, state_vector):
             return False
     return True
 

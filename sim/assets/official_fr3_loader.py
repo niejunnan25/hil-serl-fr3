@@ -22,14 +22,26 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 
-_NATIVE_FR3_USD_PATH = "/home/robot/droid/droid/sim/assets/fr3.usd"
-_FR3_GRIPPER_COLLISION_USD_PATH = (
-    "/home/robot/droid/droid/sim/assets/fr3_gripper_collision.usd"
+# Canonical PD gains shared with sim/scenes/plug_scene.py (stable_sim profile).
+from sim.assets.fr3_pd_gains import (
+    ARM_STIFFNESS,
+    ARM_DAMPING,
+    ARM_EFFORT_LIMIT_SIM,
+    GRIPPER_STIFFNESS,
+    GRIPPER_DAMPING,
+)
+
+# Canonical repo-relative USD paths (single source of truth; no host paths).
+# The repo ships sim/assets/fr3.usd and sim/assets/fr3_gripper_collision.usd,
+# which are exactly the native + patched meshes this loader expects.
+from .paths import (
+    FR3_USD_PATH as _NATIVE_FR3_USD_PATH,
+    FR3_GRIPPER_COLLISION_USD_PATH as _FR3_GRIPPER_COLLISION_USD_PATH,
 )
 
 # Default home pose — copied from spec §2.5 + handoff RobotEnv reset_joints
 # RobotEnv.reset_joints  = [0, 0, 0, -π/2, 0, π/2, 0]
-# (per /home/robot/droid/droid/robot_env.py reset_joints array)
+# (per the real RobotEnv.reset_joints array; see fr3-desktop handoff)
 _FR3_DEFAULT_HOME = {
     "fr3_joint1": 0.0,
     "fr3_joint2": 0.0,
@@ -208,13 +220,9 @@ def _build_native_fr3_cfg(
         disable_gravity = True
         arm_actuator = ImplicitActuatorCfg(
             joint_names_expr=["fr3_joint[1-7]"],
-            effort_limit_sim={
-                "fr3_joint1": 87.0, "fr3_joint2": 87.0, "fr3_joint3": 87.0,
-                "fr3_joint4": 87.0, "fr3_joint5": 12.0, "fr3_joint6": 12.0,
-                "fr3_joint7": 12.0,
-            },
-            stiffness=400.0,
-            damping=80.0,
+            effort_limit_sim=dict(ARM_EFFORT_LIMIT_SIM),
+            stiffness=ARM_STIFFNESS,
+            damping=ARM_DAMPING,
         )
     elif actuator_profile == "hardware_kq":
         disable_gravity = False
@@ -260,8 +268,8 @@ def _build_native_fr3_cfg(
             "arm": arm_actuator,
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["fr3_finger_joint.*"],
-                stiffness=2e3,
-                damping=1e2,
+                stiffness=GRIPPER_STIFFNESS,
+                damping=GRIPPER_DAMPING,
             ),
         },
     )

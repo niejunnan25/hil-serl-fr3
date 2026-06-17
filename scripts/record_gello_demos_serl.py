@@ -61,8 +61,7 @@ DEFAULT_SERVER_URL = "http://127.0.0.2:5000/"
 DEFAULT_JOINT_SIGNS = [1, -1, 1, 1, 1, -1, 1]
 
 # FR3 关节限位
-FR3_LOWER_LIMITS = np.array([-2.8, -1.66, -2.8, -2.97, -2.8, 0.08, -2.8])
-FR3_UPPER_LIMITS = np.array([2.8, 1.66, 2.8, -0.17, 2.8, 3.65, 2.8])
+from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS  # noqa: E402
 FR3_DEFAULT_JOINTS = np.array([0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0])
 
 
@@ -129,12 +128,17 @@ class FR3Robot:
     def __init__(self, server_url: str = DEFAULT_SERVER_URL):
         self.server_url = server_url.rstrip("/")
         self._state = None
+        # Proxy-safe: trust_env=False so the desktop's HTTP(S)_PROXY env
+        # (which lacks a CIDR no_proxy for the internal franka_server IP)
+        # never intercepts these calls. Matches relative_teleop._session().
+        self._session = requests.Session()
+        self._session.trust_env = False
 
     def connect(self):
         """验证服务器可达。"""
         url = f"{self.server_url}/healthz"
         try:
-            resp = requests.post(url, json={}, timeout=5)
+            resp = self._session.post(url, json={}, timeout=5)
             resp.raise_for_status()
             health = resp.json()
             print(f"[FR3] Connected to {self.server_url} (health: {health})")
@@ -146,7 +150,7 @@ class FR3Robot:
     def get_state(self) -> dict:
         """POST /getstate -> 完整状态字典。"""
         url = f"{self.server_url}/getstate"
-        resp = requests.post(url, json={}, timeout=5)
+        resp = self._session.post(url, json={}, timeout=5)
         resp.raise_for_status()
         self._state = resp.json()
         return self._state
@@ -170,21 +174,21 @@ class FR3Robot:
         """POST /pose <- {"arr": [x,y,z,qx,qy,qz,qw]}。"""
         url = f"{self.server_url}/pose"
         payload = {"arr": list(pose)}
-        resp = requests.post(url, json=payload, timeout=5)
+        resp = self._session.post(url, json=payload, timeout=5)
         resp.raise_for_status()
 
     def send_gripper_command(self, action: str):
         """发送夹爪命令: 'open' 或 'close'。"""
         endpoint = "open_gripper" if action == "open" else "close_gripper"
         url = f"{self.server_url}/{endpoint}"
-        resp = requests.post(url, json={}, timeout=5)
+        resp = self._session.post(url, json={}, timeout=5)
         resp.raise_for_status()
 
     def clear_error(self):
         """POST /clearerr。"""
         url = f"{self.server_url}/clearerr"
         try:
-            resp = requests.post(url, json={}, timeout=5)
+            resp = self._session.post(url, json={}, timeout=5)
             resp.raise_for_status()
         except requests.RequestException as e:
             print(f"[FR3] clear_error failed: {e}")

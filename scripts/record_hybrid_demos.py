@@ -76,8 +76,7 @@ DEFAULT_LEADER_SCALE = 0.50
 DEFAULT_OUTPUT_DIR = "/tmp/hybrid_demos"
 DEFAULT_JOINT_SIGNS = [1, -1, 1, 1, 1, -1, 1]
 
-FR3_LOWER_LIMITS = np.array([-2.8, -1.66, -2.8, -2.97, -2.8, 0.08, -2.8])
-FR3_UPPER_LIMITS = np.array([2.8, 1.66, 2.8, -0.17, 2.8, 3.65, 2.8])
+from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS  # noqa: E402
 FR3_DEFAULT_JOINTS = np.array([0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0])
 
 # Mode labels for per-step metadata.

@@ -43,18 +43,25 @@ def test_state_keys_ordered_matches_gello_replay_state_construction():
     assert STATE_KEYS_ORDERED == ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Arith breakdown 7+6+3+3+1=20 != STATE_DIMS=25 (wrapper.py 注释)。"
+        "已知 25D 矛盾：CPU 环境无 isaaclab，无法 env.sample()['state'].shape 实测裁决。"
+        "strict xfail：当前算式冲突时记为 xfailed(绿)；若有人把矛盾改成相等而未移除本 marker，"
+        "会触发 XPASS->FAILED 强制 reviewer 处理。"
+    ),
+)
 def test_state_25d_breakdown_sums_match_dims():
     """按 wrapper.py 注释 7+6+3+3+1=20 ≠ STATE_DIMS=25 (注释+实测的 25D 不一致是已知问题)。
-    本测试只记录算式以提醒 reviewer，**不 fail**。
+
+    硬信号：用 strict xfail 把算术矛盾从 warning 升级为受追踪的 expected failure。
+    合并时仍需实测 env.sample()['state'].shape 裁决 20 vs 25，并在裁决后移除本 marker。
     """
     from sim.data.contract import STATE_DIMS
     breakdown_arith = 7 + 6 + 3 + 3 + 1  # tcp_pose(7) + tcp_vel(6) + force(3) + torque(3) + gripper(1)
-    # 算式 20 与 wrapper.py 注释 25D 不一致；用户合并时实测 env.sample()["state"].shape 决定
-    # 临时 hardcode 25 以匹配 wrapper.py 注释
-    if breakdown_arith != STATE_DIMS:
-        import warnings
-        warnings.warn(
-            f"Arith breakdown ({breakdown_arith}) != STATE_DIMS ({STATE_DIMS}); "
-            f"wrapper.py 注释的 25D 与 7+6+3+3+1=20 算式冲突。A2 hard-freeze STATE_DIMS=25 "
-            f"match wrapper.py; 合并时实测 env.sample()['state'].shape 决定最终值。"
-        )
+    assert breakdown_arith == STATE_DIMS, (
+        f"Arith breakdown ({breakdown_arith}) != STATE_DIMS ({STATE_DIMS}); "
+        f"wrapper.py 注释的 25D 与 7+6+3+3+1=20 算式冲突。A2 hard-freeze STATE_DIMS=25 "
+        f"match wrapper.py; 合并时实测 env.sample()['state'].shape 决定最终值。"
+    )

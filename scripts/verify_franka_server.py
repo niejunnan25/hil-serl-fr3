@@ -59,7 +59,7 @@ READ_ENDPOINTS: dict[str, dict[str, type | tuple[type, ...]]] = {
 # on the mock server they return 409 (NO_MOTION_MOCK_REJECTED) which is also
 # a valid "server is alive" signal.
 COMMAND_ENDPOINTS: dict[str, dict[str, Any]] = {
-    "/pose":           {"pose": [0.45, 0.0, 0.30, 0.0, 0.0, 0.0, 1.0]},
+    "/pose":           {"arr": [0.45, 0.0, 0.30, 0.0, 0.0, 0.0, 1.0]},
     "/open_gripper":   {},
     "/close_gripper":  {},
     "/jointreset":     {},
@@ -78,16 +78,16 @@ COMMAND_ENDPOINTS: dict[str, dict[str, Any]] = {
         "translational_Ki": 0,
         "translational_clip_x": 0.008,
         "translational_clip_y": 0.008,
-        "translational_clip_z": 0.006,
+        "translational_clip_z": 0.0072,
         "translational_clip_neg_x": 0.008,
         "translational_clip_neg_y": 0.008,
-        "translational_clip_neg_z": 0.006,
-        "rotational_clip_x": 0.025,
-        "rotational_clip_y": 0.025,
-        "rotational_clip_z": 0.02,
-        "rotational_clip_neg_x": 0.025,
-        "rotational_clip_neg_y": 0.025,
-        "rotational_clip_neg_z": 0.02,
+        "translational_clip_neg_z": 0.0072,
+        "rotational_clip_x": 0.05,
+        "rotational_clip_y": 0.05,
+        "rotational_clip_z": 0.05,
+        "rotational_clip_neg_x": 0.05,
+        "rotational_clip_neg_y": 0.05,
+        "rotational_clip_neg_z": 0.05,
         "rotational_Ki": 0,
     },
 }

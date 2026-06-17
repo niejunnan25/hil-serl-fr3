@@ -3,7 +3,8 @@
 The operator drives the WHOLE flow from the desktop terminal, so start/stop
 signalling is in the terminal in front of them (no chat-latency desync):
 
-  1. Connectivity check + (default) RESET the robot to HOME via /jointreset.
+  1. Connectivity check + (default) RESET the robot to HOME via Cartesian
+     reset_to_home (NOT /jointreset — that fails on the real arm).
      The robot moves AUTONOMOUSLY — the script warns and waits for Enter first;
      operator must be clear of the arm with the E-stop in hand.
   2. Open devices + start the hybrid GELLO/Xbox recording. "▶ 示教现在开始" is
@@ -161,7 +162,7 @@ def main(argv=None):
             return 1
         print("复位中（机器人移动）...", flush=True)
         try:
-            reset_to_home(session, a.server, home, max_step=max(a.max_step, 0.006))
+            reset_to_home(session, a.server, home)  # fast defaults: 35mm/tick, 90s, clip-boosted
         except (Exception, KeyboardInterrupt) as e:
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             print(f"[ERR] 复位失败: {type(e).__name__}: {e}")
@@ -175,7 +176,8 @@ def main(argv=None):
     print(">>> 初始化后会提示 [ALIGN]：**把 GELLO 摆到和机器人一样的 HOME 姿态**（照着机械臂摆，")
     print("    夹爪朝下、手臂形状对齐），按 Enter——这步是主从对齐，不对齐会乱动。")
     print(">>> 然后 '▶ 示教现在开始'：GELLO 移动跟随 + 捏夹爪闭合；☰(Menu) 切 Xbox（GELLO 失效）；")
-    print("    Xbox 按住 RB + 摇杆精插，RT 闭/LT 张；再按 ☰ 切回 GELLO。")
+    print("    Xbox 按住 RB（死手）：左摇杆=前后左右(X/Y)、右摇杆上下=升降(Z，锁存防漂)、")
+    print("    右摇杆左右=yaw、D-pad=pitch/roll、A=插入(18N下压+X/Y螺旋搜索)、RT 闭/LT 开夹爪；再按 ☰ 切回 GELLO。")
     print("    完成后在本终端按 Ctrl-C 结束示教。")
     print("-" * 64, flush=True)
 
