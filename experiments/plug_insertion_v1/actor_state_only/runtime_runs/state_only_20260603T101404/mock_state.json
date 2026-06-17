@@ -1,0 +1,17 @@
+{
+  "fci_state_read": false,
+  "fr3_connection": false,
+  "source": "mock_state_only",
+  "state_vector": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ]
+}

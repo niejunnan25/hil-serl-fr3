@@ -1,0 +1,161 @@
+{
+  "camera": {
+    "api": "pyzed.sl",
+    "fps": 15,
+    "model": "ZED 2i",
+    "resolution": "HD720",
+    "serial_number": 36276705
+  },
+  "capture_timestamp": 1780555934.6374886,
+  "frames": {
+    "zed_external_36276705_left_raw": {
+      "dtype": "uint8",
+      "max": 255,
+      "mean": [
+        127.64423394097223,
+        128.47553385416666,
+        126.80893446180555
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_external_36276705_left_raw.png",
+      "sha256": "bf212b5d74e6a38bdf73b77a52410738ecdc00c5df7499f5d51e03b53a51d6fd",
+      "shape": [
+        720,
+        1280,
+        3
+      ],
+      "std": [
+        66.97026325580609,
+        67.40230534946852,
+        67.4189387399311
+      ]
+    },
+    "zed_left_128": {
+      "dtype": "uint8",
+      "max": 254,
+      "mean": [
+        127.6329345703125,
+        128.47039794921875,
+        126.80230712890625
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_left_128.png",
+      "sha256": "5b0d38aba0b769878de62661461f3815e6b128fb3b185ebbbcc975f55e40b574",
+      "shape": [
+        128,
+        128,
+        3
+      ],
+      "std": [
+        65.135453847588,
+        65.56440452195254,
+        65.62197847990133
+      ]
+    },
+    "zed_left_full": {
+      "dtype": "uint8",
+      "max": 255,
+      "mean": [
+        127.64423394097223,
+        128.47553385416666,
+        126.80893446180555
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_left_full.png",
+      "sha256": "bf212b5d74e6a38bdf73b77a52410738ecdc00c5df7499f5d51e03b53a51d6fd",
+      "shape": [
+        720,
+        1280,
+        3
+      ],
+      "std": [
+        66.97026325580609,
+        67.40230534946852,
+        67.4189387399311
+      ]
+    },
+    "zed_right_128": {
+      "dtype": "uint8",
+      "max": 254,
+      "mean": [
+        133.1856689453125,
+        133.8780517578125,
+        132.57354736328125
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_right_128.png",
+      "sha256": "97f54ceba580c50c3b7d73920f1d7f65143acbb63e5c9c5ab2bb361a9388caa4",
+      "shape": [
+        128,
+        128,
+        3
+      ],
+      "std": [
+        63.37918020215656,
+        63.933810505057025,
+        64.00141112459903
+      ]
+    },
+    "zed_right_full": {
+      "dtype": "uint8",
+      "max": 255,
+      "mean": [
+        133.20696506076388,
+        133.90399305555556,
+        132.60476779513888
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_right_full.png",
+      "sha256": "60bd7eef63e28115e1208aa3221cb9ed68dded5a1b7403be2e94b1daf40a4f03",
+      "shape": [
+        720,
+        1280,
+        3
+      ],
+      "std": [
+        65.28747233364545,
+        65.8436289690182,
+        65.85018882207078
+      ]
+    },
+    "zed_stereo_full": {
+      "dtype": "uint8",
+      "max": 255,
+      "mean": [
+        130.42559950086806,
+        131.18976345486112,
+        129.7068511284722
+      ],
+      "min": 0,
+      "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil/zed_stereo_full.png",
+      "sha256": "0dd39b2693c82fb2c907b26a3a10cca76580a2b011e3af59877770ddb8d8c9f8",
+      "shape": [
+        720,
+        2560,
+        3
+      ],
+      "std": [
+        66.19268159329545,
+        66.68278760999856,
+        66.70216079982502
+      ]
+    }
+  },
+  "ok": true,
+  "run_root": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1453_full_res_current_pnp_pil",
+  "runtime_claims": {
+    "camera_source_open": true,
+    "droid_mutation": false,
+    "fci_state_read": false,
+    "fixture_contact": false,
+    "fr3_connection": false,
+    "frame_read": true,
+    "gripper_command": false,
+    "live_micro_motion": false,
+    "motion_command": false,
+    "openpi_dependency": false,
+    "policy_rollout": false,
+    "sample_frame_capture": true
+  },
+  "status": "ZED_STEREO_CAMERA_CAPTURE_RUNTIME_PROVEN_NO_MOTION_PIL_FALLBACK"
+}

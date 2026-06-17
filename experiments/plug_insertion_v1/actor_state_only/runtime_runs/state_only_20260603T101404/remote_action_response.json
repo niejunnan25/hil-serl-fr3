@@ -1,0 +1,18 @@
+{
+  "action": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.0
+  ],
+  "action_dim": 7,
+  "action_schema_hash": "hilserl7d:v1:cartesian_delta_rpy_gripper",
+  "action_space": "normalized_cartesian_delta_rpy_gripper",
+  "checkpoint_id": "mock-plug-policy-ckpt-000",
+  "decision": "ACCEPT_ACTION",
+  "policy_version": "mock-policy-v1",
+  "request_id": "nominal-001"
+}

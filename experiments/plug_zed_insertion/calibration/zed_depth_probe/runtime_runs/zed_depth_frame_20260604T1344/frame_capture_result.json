@@ -1,0 +1,39 @@
+{
+  "artifact": "plug_zed_depth_frame_capture",
+  "depth_max_m": 19.985916137695312,
+  "depth_median_m": 1.322831153869629,
+  "depth_min_m": 0.5001155734062195,
+  "depth_npy": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_depth_probe/runtime_runs/zed_depth_frame_20260604T1344/depth_m.npy",
+  "depth_shape": [
+    376,
+    672
+  ],
+  "fixture_contact": false,
+  "grabbed": true,
+  "gripper_command": false,
+  "image_shape": [
+    376,
+    672,
+    4
+  ],
+  "left_png": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_depth_probe/runtime_runs/zed_depth_frame_20260604T1344/left.png",
+  "left_png_write_status": "SUCCESS",
+  "live_micro_motion": false,
+  "motion_command": false,
+  "no_robot_connection": true,
+  "open_status": "SUCCESS",
+  "overall_goal_complete": false,
+  "positive_depth_count": 192385,
+  "python_executable": "/home/robot/miniconda3/bin/python",
+  "remote_dir": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_depth_probe/runtime_runs/zed_depth_frame_20260604T1344",
+  "run_id": "zed_depth_frame_20260604T1344",
+  "safe_to_claim_100_percent": false,
+  "schema_version": 1,
+  "status": "PLUG_ZED_DEPTH_FRAME_CAPTURED_NOT_AXIS_EVIDENCE",
+  "xyz_npy": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_depth_probe/runtime_runs/zed_depth_frame_20260604T1344/xyz_m.npy",
+  "xyz_shape": [
+    376,
+    672,
+    4
+  ]
+}

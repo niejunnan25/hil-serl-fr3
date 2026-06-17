@@ -1,0 +1,20 @@
+{
+  "accepted_action_dim": 7,
+  "accepted_action_space": "normalized_cartesian_delta_rpy_gripper",
+  "accepted_decision": "ACCEPT_ACTION_FOR_STATE_ONLY_TRACE_ONLY",
+  "camera_capture": false,
+  "droid_dependency": false,
+  "fci_state_read": false,
+  "fr3_connection": false,
+  "frame_read": false,
+  "gripper_command_sent": false,
+  "motion_command_sent": false,
+  "negative_decision": "BRIDGE_HOLD_OR_STOP",
+  "negative_reject_code": "OLD_8D_OPENPI_DROID_ACTION",
+  "policy_rollout": false,
+  "process_name": "hilserl_desktop_actor_state_only",
+  "runtime_mode": "state_only_no_motion",
+  "state_age_ms": 0.0,
+  "state_source": "mock_state_only",
+  "timestamp": 1780452845.8312604
+}

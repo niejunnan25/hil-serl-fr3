@@ -1,0 +1,16 @@
+{
+  "active_task": "plug_zed_insertion",
+  "angular_uncertainty_rad": 0.05,
+  "axis_derivation": "human measured base-frame unit axis",
+  "axis_source": "human_measured_fixture_axis",
+  "axis_source_detail": "fixture_z_negative human measured as FR3 base [0, 0, -1]; user clarified insertion direction is from robot end-effector toward experiment table",
+  "fixture_frame": "fixture_plug_socket_v1",
+  "fr3_base_axis_unit_vector": [
+    0.0,
+    0.0,
+    -1.0
+  ],
+  "fr3_base_to_fixture_xyz_rpy": null,
+  "runtime_execution_performed": false,
+  "symbolic_axis": "fixture_z_negative"
+}

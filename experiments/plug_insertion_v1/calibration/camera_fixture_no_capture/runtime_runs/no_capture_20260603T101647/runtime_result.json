@@ -1,0 +1,87 @@
+{
+  "approval_phrase": "APPROVE CAMERA FIXTURE CALIBRATION NO-CAPTURE",
+  "calibration_root": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_insertion_v1/calibration/camera_fixture_no_capture",
+  "calibration_runtime_executed": true,
+  "camera_capture": false,
+  "desktop_host": "fr3-desktop-ts",
+  "desktop_result_file": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_insertion_v1/calibration/camera_fixture_no_capture/runtime_runs/no_capture_20260603T101647/runtime_result.json",
+  "desktop_run_dir": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_insertion_v1/calibration/camera_fixture_no_capture/runtime_runs/no_capture_20260603T101647",
+  "fixture_contact": false,
+  "fixture_frame": "fixture_plug_socket_v1",
+  "frame_read": false,
+  "manifest_checked": true,
+  "manifest_file": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_insertion_v1/calibration/camera_fixture_no_capture/runtime_runs/no_capture_20260603T101647/calibration_manifest.json",
+  "no_camera_capture": true,
+  "no_classifier_training": true,
+  "no_dataset_read": true,
+  "no_demo_collection": true,
+  "no_droid_dependency": true,
+  "no_fci_state_read": true,
+  "no_fixture_contact": true,
+  "no_fr3_connection": true,
+  "no_frame_read": true,
+  "no_gripper_command": true,
+  "no_motion_command": true,
+  "no_policy_rollout": true,
+  "ok": true,
+  "output_size": [
+    128,
+    128
+  ],
+  "postflight_residue_empty": true,
+  "postflight_scan": {
+    "desktop_target": ""
+  },
+  "preflight_scan": {
+    "desktop_target": ""
+  },
+  "probe_result": {
+    "calibration_runtime_executed": true,
+    "camera_capture": false,
+    "fci_state_read": false,
+    "fixture_contact": false,
+    "fixture_frame": "fixture_plug_socket_v1",
+    "fr3_connection": false,
+    "frame_read": false,
+    "gripper_command": false,
+    "manifest_checked": true,
+    "motion_command": false,
+    "no_camera_capture": true,
+    "no_droid_dependency": true,
+    "no_fci_state_read": true,
+    "no_fixture_contact": true,
+    "no_fr3_connection": true,
+    "no_frame_read": true,
+    "no_gripper_command": true,
+    "no_motion_command": true,
+    "no_policy_rollout": true,
+    "output_size": [
+      128,
+      128
+    ],
+    "policy_rollout": false,
+    "process_name": "hilserl_camera_fixture_no_capture",
+    "remote_network_call": false,
+    "roles": [
+      "front",
+      "wrist"
+    ],
+    "source_keys": {
+      "front": "observation/image",
+      "wrist": "observation/wrist_image"
+    },
+    "success": true,
+    "timestamp": 1780453008.2882433
+  },
+  "remote_network_call": false,
+  "roles": [
+    "front",
+    "wrist"
+  ],
+  "run_id": "20260603T101647",
+  "source_keys": {
+    "front": "observation/image",
+    "wrist": "observation/wrist_image"
+  },
+  "status": "CAMERA_FIXTURE_CALIBRATION_NO_CAPTURE_PROVEN"
+}

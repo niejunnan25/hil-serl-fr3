@@ -1,0 +1,38 @@
+{
+  "calibration_runtime_executed": true,
+  "camera_capture": false,
+  "fci_state_read": false,
+  "fixture_contact": false,
+  "fixture_frame": "fixture_plug_socket_v1",
+  "fr3_connection": false,
+  "frame_read": false,
+  "gripper_command": false,
+  "manifest_checked": true,
+  "motion_command": false,
+  "no_camera_capture": true,
+  "no_droid_dependency": true,
+  "no_fci_state_read": true,
+  "no_fixture_contact": true,
+  "no_fr3_connection": true,
+  "no_frame_read": true,
+  "no_gripper_command": true,
+  "no_motion_command": true,
+  "no_policy_rollout": true,
+  "output_size": [
+    128,
+    128
+  ],
+  "policy_rollout": false,
+  "process_name": "hilserl_camera_fixture_no_capture",
+  "remote_network_call": false,
+  "roles": [
+    "front",
+    "wrist"
+  ],
+  "source_keys": {
+    "front": "observation/image",
+    "wrist": "observation/wrist_image"
+  },
+  "success": true,
+  "timestamp": 1780453008.2882433
+}

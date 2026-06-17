@@ -1,0 +1,117 @@
+{
+  "action_schema_hash": "hilserl7d:v1:cartesian_delta_rpy_gripper",
+  "approval_phrase": "APPROVE PLUG-ZED CAMERA FIXTURE CAPTURE NO-MOTION",
+  "camera_closed_before_postflight_scan": true,
+  "capture_root": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_fixture_capture",
+  "fixture": {
+    "fixture_frame": "fixture_plug_socket_v1",
+    "fixture_id": "bench-plug-fixture-001"
+  },
+  "frames": [
+    {
+      "capture_timestamp": 1780489021.3392456,
+      "captured_frame_path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_fixture_capture/plug_zed_camera_capture_20260603T121659Z/samples/zed_left_frame_000001.png",
+      "crop_xywh": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "dtype": "uint8",
+      "output_size": [
+        128,
+        128
+      ],
+      "raw_size": [
+        1280,
+        720
+      ],
+      "role": "zed_left",
+      "serial": "ZED_2I_36276705",
+      "sha256": "e896ffe60395c48e2d281a63a2dac06a8ffb08121ad922bf4b14d96d6bd24830",
+      "source_key": "zed_left"
+    },
+    {
+      "capture_timestamp": 1780489021.3392456,
+      "captured_frame_path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/zed_fixture_capture/plug_zed_camera_capture_20260603T121659Z/samples/zed_right_frame_000001.png",
+      "crop_xywh": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "dtype": "uint8",
+      "output_size": [
+        128,
+        128
+      ],
+      "raw_size": [
+        1280,
+        720
+      ],
+      "role": "zed_right",
+      "serial": "ZED_2I_36276705",
+      "sha256": "16e3e01d249c7140fecb930c784197f7a2ad4b11a84e6fb1328e67e6b3447e97",
+      "source_key": "zed_right"
+    }
+  ],
+  "observation_schema_hash": "plugzedobs:v1:zed_left_zed_right:fci_gripper_state",
+  "postflight_residue_empty": true,
+  "postflight_scan": {
+    "command": "ps -Ao pid=,ppid=,command=",
+    "empty": true,
+    "patterns": [
+      "zed_camera_service.py",
+      "plug_zed_camera_fixture_capture_runtime.py",
+      "franka_server",
+      "polymetis",
+      "RobotEnv"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "precondition_statuses": {
+    "plug_zed_camera_fixture_capture_result_contract": "PROVEN_FOR_STATIC_ZED_RESULT_CONTRACT",
+    "plug_zed_camera_fixture_capture_runtime_scaffold_deployed": "PLUG_ZED_CAMERA_FIXTURE_CAPTURE_RUNTIME_SCAFFOLD_DEPLOYED",
+    "plug_zed_camera_gate_alignment_contract": "PLUG_ZED_CAMERA_GATE_ALIGNMENT_CONTRACT_PROVEN",
+    "plug_zed_remote_source_contract": "PLUG_ZED_REMOTE_SOURCE_CONTRACT_PROVEN",
+    "zed_camera_service_runtime": "ZED_CAMERA_SERVICE_RUNTIME_PROVEN"
+  },
+  "preflight_residue_empty": true,
+  "preflight_scan": {
+    "command": "ps -Ao pid=,ppid=,command=",
+    "empty": true,
+    "patterns": [
+      "zed_camera_service.py",
+      "plug_zed_camera_fixture_capture_runtime.py",
+      "franka_server",
+      "polymetis",
+      "RobotEnv"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": ""
+  },
+  "run_id": "plug_zed_camera_capture_20260603T121659Z",
+  "runtime_claims": {
+    "camera_closed_before_postflight_scan": true,
+    "camera_source_open": true,
+    "classifier_training": false,
+    "demo_collection": false,
+    "droid_mutation": false,
+    "fci_state_read": false,
+    "fixture_contact": false,
+    "fr3_connection": false,
+    "frame_read": true,
+    "gripper_command": false,
+    "live_checkpoint_promotion": false,
+    "motion_command": false,
+    "openpi_dependency": false,
+    "policy_rollout": false,
+    "remote_training_side_effect": false,
+    "reward_label_collection": false,
+    "sample_frame_capture": true
+  },
+  "status": "PLUG_ZED_CAMERA_FIXTURE_CAPTURE_RUNTIME_PROVEN"
+}

@@ -1,0 +1,71 @@
+{
+  "active_task": "plug_zed_insertion",
+  "angular_uncertainty_rad": 0.05,
+  "approval_phrase": "APPROVE PLUG-ZED FIXTURE AXIS CALIBRATION NO-MOTION",
+  "axis_source": "human_measured_fixture_axis",
+  "axis_source_detail": "fixture_z_negative human measured as FR3 base [0, 0, -1]; user clarified insertion direction is from robot end-effector toward experiment table",
+  "cleanup": {
+    "postflight_residue_empty": true,
+    "postflight_scan": {
+      "local_target": "",
+      "remote_target": ""
+    },
+    "preflight_residue_empty": true,
+    "preflight_scan": {
+      "local_target": "",
+      "remote_target": ""
+    }
+  },
+  "evidence": {
+    "calibration_notes_path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/runtime_runs/plug_zed_fixture_axis_calibration_20260604T144122+0800/fixture_axis_notes.md",
+    "source_artifact_path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/runtime_runs/plug_zed_fixture_axis_calibration_20260604T144122+0800/fixture_axis_result.json",
+    "source_artifact_sha256": "d19dd692e0cfd227d04a693c4d324f6b0ea517a80787cdb7fba0fd2e00271b07",
+    "transform_artifact_path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/runtime_runs/plug_zed_fixture_axis_calibration_20260604T144122+0800/fixture_axis_transform.json",
+    "transform_artifact_sha256": "9a3c3a1ad4b80aa333e5c4cf4a602a83924df4d28fe9e66d471d78de801b744d"
+  },
+  "fixture_frame": "fixture_plug_socket_v1",
+  "fr3_base_axis_unit_vector": [
+    0.0,
+    0.0,
+    -1.0
+  ],
+  "preconditions": {
+    "contact_micro_motion_live_control_body": "PLUG_ZED_CONTACT_MICRO_MOTION_LIVE_CONTROL_BODY_SOURCE_COMPILED_AND_SELF_CHECKED",
+    "fci_gripper_state_only_runtime": "FR3_FCI_GRIPPER_STATE_ONLY_RUNTIME_PROVEN",
+    "plug_zed_formal_camera_capture_runtime": "PLUG_ZED_CAMERA_FIXTURE_CAPTURE_RUNTIME_PROVEN",
+    "plug_zed_remote_source_contract": "PLUG_ZED_REMOTE_SOURCE_CONTRACT_PROVEN"
+  },
+  "run_id": "plug_zed_fixture_axis_calibration_20260604T144122+0800",
+  "runtime_claims": {
+    "checkpoint_promotion": false,
+    "classifier_training": false,
+    "demo_collection": false,
+    "droid_mutation": false,
+    "fci_state_read": false,
+    "fixture_contact": false,
+    "fr3_connection": false,
+    "gripper_command": false,
+    "live_micro_motion": false,
+    "motion_command": false,
+    "old_8d_joint_target_action_accepted": false,
+    "openpi_dependency": false,
+    "policy_rollout": false,
+    "remote_training": false,
+    "reward_label_collection": false,
+    "thread_019e4faf_touched": false
+  },
+  "status": "PLUG_ZED_FIXTURE_AXIS_BASE_CALIBRATION_PROVEN",
+  "symbolic_axis": "fixture_z_negative",
+  "wrapper_ready_not_executed": {
+    "execute_live": false,
+    "fixture_axis_base": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "fixture_axis_base_confirmed": true,
+    "reviewed_live_control_body_confirmed": true,
+    "runtime_execution_performed": false,
+    "status": "PLUG_ZED_CONTACT_MICRO_MOTION_READY_RUNTIME_NOT_EXECUTED"
+  }
+}

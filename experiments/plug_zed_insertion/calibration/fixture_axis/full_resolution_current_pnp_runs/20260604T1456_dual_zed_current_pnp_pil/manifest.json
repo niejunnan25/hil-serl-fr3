@@ -1,0 +1,164 @@
+{
+  "captures": [
+    {
+      "camera": {
+        "api": "pyzed.sl",
+        "fps": 15,
+        "model": "ZED 2i",
+        "resolution": "HD720",
+        "serial_number": 36276705
+      },
+      "capture_timestamp": 1780556259.6598973,
+      "frames": {
+        "expected_position_calibration_name": {
+          "dtype": "uint8",
+          "max": 255,
+          "mean": [
+            123.45147135416667,
+            124.39055121527778,
+            122.60351996527778
+          ],
+          "min": 0,
+          "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil/zed_external_36276705_left_raw.png",
+          "sha256": "2e7c85d819420fe6ede5c90f5772ca8e9b5c0e5e81794dda13be78f55853ef5f",
+          "shape": [
+            720,
+            1280,
+            3
+          ],
+          "std": [
+            65.36374296941034,
+            65.83989250782162,
+            65.72613295117498
+          ]
+        },
+        "left_128": {
+          "dtype": "uint8",
+          "max": 254,
+          "mean": [
+            123.44146728515625,
+            124.38232421875,
+            122.5943603515625
+          ],
+          "min": 0,
+          "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil/external_36276705/zed_left_128.png",
+          "sha256": "f11b4530eec79ec0611452f7069eea959c4775a11a617422042534cb81b454c2",
+          "shape": [
+            128,
+            128,
+            3
+          ],
+          "std": [
+            63.54159979098407,
+            64.01633584445122,
+            63.94007553334599
+          ]
+        },
+        "left_full": {
+          "dtype": "uint8",
+          "max": 255,
+          "mean": [
+            123.45147135416667,
+            124.39055121527778,
+            122.60351996527778
+          ],
+          "min": 0,
+          "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil/external_36276705/zed_left_full.png",
+          "sha256": "2e7c85d819420fe6ede5c90f5772ca8e9b5c0e5e81794dda13be78f55853ef5f",
+          "shape": [
+            720,
+            1280,
+            3
+          ],
+          "std": [
+            65.36374296941034,
+            65.83989250782162,
+            65.72613295117498
+          ]
+        },
+        "right_128": {
+          "dtype": "uint8",
+          "max": 253,
+          "mean": [
+            128.81768798828125,
+            129.57073974609375,
+            128.2152099609375
+          ],
+          "min": 0,
+          "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil/external_36276705/zed_right_128.png",
+          "sha256": "2a1f43315f2a2806de3bcda9ae561012617cb1cdde8937aec3c7bdb36f19df5f",
+          "shape": [
+            128,
+            128,
+            3
+          ],
+          "std": [
+            61.84480424130442,
+            62.44714464883875,
+            62.40355408630506
+          ]
+        },
+        "right_full": {
+          "dtype": "uint8",
+          "max": 255,
+          "mean": [
+            128.83326605902778,
+            129.58824761284723,
+            128.2391579861111
+          ],
+          "min": 0,
+          "path": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil/external_36276705/zed_right_full.png",
+          "sha256": "d0d45d7cf19303bf156d52470cf4cb4d48804066dbebf63c4b2bb51139d38af9",
+          "shape": [
+            720,
+            1280,
+            3
+          ],
+          "std": [
+            63.72561563304544,
+            64.32765688430551,
+            64.2296049698634
+          ]
+        }
+      },
+      "label": "external_36276705",
+      "ok": true,
+      "runtime_claims": {
+        "camera_source_open": true,
+        "droid_mutation": false,
+        "fci_state_read": false,
+        "fixture_contact": false,
+        "fr3_connection": false,
+        "frame_read": true,
+        "gripper_command": false,
+        "live_micro_motion": false,
+        "motion_command": false,
+        "openpi_dependency": false,
+        "policy_rollout": false,
+        "sample_frame_capture": true
+      },
+      "serial_requested": 36276705,
+      "status": "ZED_FULL_RES_SERIAL_CAPTURE_PROVEN_NO_MOTION_PIL_FALLBACK"
+    },
+    {
+      "error": "CAMERA NOT DETECTED",
+      "label": "wrist_13132609",
+      "ok": false,
+      "serial_requested": 13132609,
+      "status": "ZED_OPEN_FAILED"
+    }
+  ],
+  "ok": false,
+  "run_root": "/home/robot/serl_projects/hil-serl-fr3/experiments/plug_zed_insertion/calibration/fixture_axis/full_resolution_current_pnp_runs/20260604T1456_dual_zed_current_pnp_pil",
+  "runtime_claims": {
+    "droid_mutation": false,
+    "fci_state_read": false,
+    "fixture_contact": false,
+    "fr3_connection": false,
+    "gripper_command": false,
+    "live_micro_motion": false,
+    "motion_command": false,
+    "policy_rollout": false
+  },
+  "status": "DUAL_ZED_FULL_RES_CURRENT_CAPTURE_PARTIAL_OR_FAILED"
+}
