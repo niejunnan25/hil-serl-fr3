@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+# scratch / editor
+*.bak*
+*.orig
+*.swp
+.DS_Store
+xbox_debug.csv
+# robot-desktop-only big trees (kept out of canonical; anchored so they never
+# match tracked source like sim/data/)
+/upstream/
+/classifier_ckpt/
+/classifier_data/
+/artifacts/
+/demos/
