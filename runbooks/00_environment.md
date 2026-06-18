@@ -32,8 +32,10 @@ JAX CUDA note:
 
 - The env sets `CUDA_ROOT` to its own `nvidia/cuda_nvcc` wheel path during
   activation.
-- This is required because JAX `0.4.35` can otherwise crash while importing the
-  namespace-style `nvidia.cuda_nvcc` package.
+- This is required because JAX can otherwise crash while importing the
+  namespace-style `nvidia.cuda_nvcc` package (first observed on the older
+  `0.4.35` line; the env now pins `0.6.2` / jaxlib `0.6.2` on both the desktop
+  actor env and the zktitan learner env, and retains the workaround).
 - Verified expected no-motion result: `jax.devices()` includes `CudaDevice(id=0)`.
 
 HIL robot infra import note:

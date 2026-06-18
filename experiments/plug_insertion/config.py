@@ -255,7 +255,7 @@ class EnvConfig(DefaultEnvConfig):
     }
 
     # raised from 150: demo insertion segments are 226-1009 steps (median 365); 150 was too
-    # short for the insert+search phase. 300 allows search without runaway. Tune as needed.
+    # short for the insert+search phase. 500 allows search without runaway. Tune as needed.
     MAX_EPISODE_LENGTH = 500
 
 

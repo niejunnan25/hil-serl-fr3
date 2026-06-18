@@ -239,3 +239,24 @@ class XboxIntervention(gym.ActionWrapper):
         if replaced:
             info["intervene_action"] = new_action
         return obs, rew, done, truncated, info
+
+
+class HoldGripperWrapper(gym.ActionWrapper):
+    """Force the gripper action to a no-op so the plug stays clamped throughout the
+    whole insert-only episode (hold-grip). Neutralizes BOTH policy and intervention
+    gripper output -> sidesteps the demo(+1=closed)/env(+1=open) gripper-sign mismatch
+    that would otherwise OPEN the gripper and drop the plug.
+
+    action[6] -> hold_value (default 0.0). The base env gripper command treats |x|<0.5
+    as a no-op, so the gripper is never commanded and stays at its closed (~0.567) state.
+    Place this directly above the base env (below the intervention wrapper)."""
+
+    def __init__(self, env, hold_value: float = 0.0):
+        super().__init__(env)
+        self.hold_value = float(hold_value)
+
+    def action(self, action):
+        a = np.asarray(action, dtype=np.float32).copy()
+        if a.shape[-1] >= 7:
+            a[6] = self.hold_value
+        return a
