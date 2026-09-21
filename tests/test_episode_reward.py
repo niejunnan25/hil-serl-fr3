@@ -227,12 +227,16 @@ def test_actor_reset_overlaps_reward_and_next_episode_waits_for_commit(tmp_path)
 
     class Environment(FakeEnvironment):
         def observation(self): return observation(self.steps + 1)
-        def reset(self):
-            value = super().reset()
+        def reset(self, *, options):
+            _, info = super().reset()
             if self.resets == 2:
                 events.append("reset-complete")
                 reset_done.set()
-            return value
+            options["hilserl_ready_barrier"](check=lambda: None)
+            if self.resets == 2:
+                assert release.is_set() and len(service.online) == 2
+                events.append("refresh")
+            return observation(99), info
         def step(self, action):
             if self.resets == 2:
                 assert len(service.online) == 2
@@ -245,12 +249,6 @@ def test_actor_reset_overlaps_reward_and_next_episode_waits_for_commit(tmp_path)
         "test-run", "actor", lambda: Provider(callback=score), lambda: Transport(service), timeout=3)
     emitted = []
 
-    def refresh():
-        if env.resets == 2:
-            assert release.is_set() and len(service.online) == 2
-            events.append("refresh")
-        return observation(99)
-
     def sample(obs, step):
         if env.steps == 0:
             assert obs["side_policy"][0, 0, 0, 0] == 99
@@ -259,8 +257,7 @@ def test_actor_reset_overlaps_reward_and_next_episode_waits_for_commit(tmp_path)
     def run():
         try:
             run_episodes(env, sample, recorder, ScriptedOperator(),
-                action_contract="fixed-xyz-v1", max_episodes=2, episode_reward=pipe, emit=emitted.append,
-                refresh_observation=refresh)
+                action_contract="fixed-xyz-v1", max_episodes=2, episode_reward=pipe, emit=emitted.append)
         except BaseException as exc:
             errors.append(exc)
 

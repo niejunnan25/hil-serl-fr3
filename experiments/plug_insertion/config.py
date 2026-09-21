@@ -222,11 +222,10 @@ class EnvConfig(DefaultEnvConfig):
         0.07049,        # yaw
     ])
 
-    # Insert-only demo recollection clear height. The older TARGET_POSE[2]+0.12
-    # target (0.2555m) repeatedly stalled at z~=0.2093 on 2026-06-24 despite clean
-    # reflex/contact flags. Keep this explicit and operator-reviewable instead of
-    # deriving it from seated z.
-    RESET_CLEAR_Z = float(os.environ.get("HILSERL_RESET_CLEAR_Z", "0.2095"))
+    # Withdraw vertically to the same Z as the randomized start. If already
+    # higher, the clear stage holds that height instead of moving down to unplug.
+    RESET_CLEAR_Z = float(os.environ.get("HILSERL_RESET_CLEAR_Z", "0.1500"))
+    RESET_FEEDBACK = _env_bool("HILSERL_RESET_FEEDBACK", False)
 
     # -- 复位位姿 = closer insertion-start for the 2026-06-18 local-5080 policy line
     #    (above the socket, ~1.5cm up, ~2.4cm back in x) --
@@ -285,6 +284,8 @@ class EnvConfig(DefaultEnvConfig):
     }
 
     # -- 精密模式参数（当前 reset 路径使用，复位后沿用到插入） --
+    # Keep the established positioning stiffness, damping and lateral control.
+    # Limit insertion/extraction spring force to 20 N with the axial error clip.
     PRECISION_PARAM = {
         "translational_stiffness": 2500,
         "translational_damping": 100,
@@ -294,12 +295,12 @@ class EnvConfig(DefaultEnvConfig):
         "translational_clip_x": 0.008,
         "translational_clip_y": 0.008,
         # error_z = z_actual - z_target; positive error drives downward.
-        # Downward spring-term cap: 2500 N/m * 16 mm = 40 N; not a force setpoint.
-        "translational_clip_z": 0.0160,
+        # Downward spring-term cap: 2500 N/m * 8 mm = 20 N; not a force setpoint.
+        "translational_clip_z": 0.0080,
         "translational_clip_neg_x": 0.008,
         "translational_clip_neg_y": 0.008,
-        # Upward spring-term cap: 2500 N/m * 16 mm = 40 N; other limits still apply.
-        "translational_clip_neg_z": 0.0160,
+        # Upward spring-term cap: 2500 N/m * 8 mm = 20 N; other limits still apply.
+        "translational_clip_neg_z": 0.0080,
         "rotational_clip_x": 0.05,
         "rotational_clip_y": 0.05,
         "rotational_clip_z": 0.05,
@@ -379,7 +380,6 @@ class TrainConfig(DefaultTrainingConfig):
         )
 
         try:
-            device_env = env
             # hold-grip: 全程钳住插头(中和夹爪动作,避免 demo/env 夹爪符号不一致而开爪丢插头)
             env = FixedAxesDeviceWrapper(env) if contract.fixed_xyz else HoldGripperWrapper(env)
 
@@ -392,19 +392,15 @@ class TrainConfig(DefaultTrainingConfig):
 
             # 3) 相对坐标系变换
             env = RelativeFrame(env)
-            relative_env = env
 
             # 4) 四元数 -> 欧拉角
             env = Quat2EulerWrapper(env)
-            quaternion_env = env
 
             # 5) SERL 标准观测包装
             env = SERLObsWrapper(env, proprio_keys=self.proprio_keys)
-            observation_env = env
 
             # 6) Chunking 包装（obs horizon=1, 无 action chunking）
             env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
-            chunk_env = env
 
             # 7) 奖励分类器（插入成功判定）
             if classifier and mode != "collect":
@@ -469,11 +465,6 @@ class TrainConfig(DefaultTrainingConfig):
             # 9) 旋转锁死（插插头只需 xy+z，policy 不需要 roll/pitch/yaw）
             env = FixedXYZActionWrapper(env) if contract.fixed_xyz else RotationLockWrapper(env)
 
-            # Reset may finish before the asynchronous reward barrier. Read fresh
-            # inputs afterwards without another reset or a dummy control action.
-            from hilserl.observation_refresh import refresh_reset_observation
-            env.refresh_observation = lambda: refresh_reset_observation(
-                device_env, relative_env, (quaternion_env, observation_env), chunk_env)
             return env
         except BaseException:
             env.close()

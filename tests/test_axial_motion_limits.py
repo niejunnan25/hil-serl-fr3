@@ -96,12 +96,18 @@ def actual_step(monkeypatch, z):
 
 
 @pytest.mark.parametrize("sign", [-1., 1.])
-def test_real_step_allows_axial_16_mm_and_40_N_spring_term(monkeypatch, sign):
+def test_real_step_keeps_axial_mapping_with_reduced_contact_spring(monkeypatch, sign):
     env = actual_step(monkeypatch, .016)
     env.step(np.array([0., 0., sign, 0., 0., 0., 0.]))
     delta = env.sent[-1][:3] - env.currpos[:3]
     np.testing.assert_allclose(delta, [0., 0., sign*.016], atol=1e-12)
-    assert abs(delta[2]) * 2500 == pytest.approx(40)
+    tree = ast.parse((ROOT / "experiments/plug_insertion/config.py").read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "EnvConfig")
+    params = ast.literal_eval(next(n.value for n in cls.body if isinstance(n, ast.Assign)
+                                  and any(isinstance(t, ast.Name) and t.id == "PRECISION_PARAM"
+                                          for t in n.targets)))
+    clip = params["translational_clip_z" if sign < 0 else "translational_clip_neg_z"]
+    assert min(abs(delta[2]), clip) * params["translational_stiffness"] == pytest.approx(20)
 
 
 def test_real_step_keeps_legacy_8_mm_and_lateral_bound(monkeypatch):

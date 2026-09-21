@@ -42,7 +42,7 @@ def _install_training_import_stubs(monkeypatch):
     monkeypatch.setitem(sys.modules, "serl_launcher.wrappers.chunking", chunking)
 
 
-def test_sample_reset_pose_respects_random_flag(monkeypatch):
+def test_random_reset_changes_translation_and_keeps_upright_orientation(monkeypatch):
     _install_training_import_stubs(monkeypatch)
     monkeypatch.setenv("HILSERL_RANDOM_RESET", "1")
     monkeypatch.setenv("HILSERL_RANDOM_XY_RANGE", "0.006")
@@ -59,9 +59,9 @@ def test_sample_reset_pose_respects_random_flag(monkeypatch):
     assert bool(cfg.RANDOM_RESET)
     assert np.max(np.abs(samples[:, 0] - base[0])) <= 0.006 + 1e-9
     assert np.max(np.abs(samples[:, 1] - base[1])) <= 0.006 + 1e-9
-    assert np.max(np.abs(samples[:, 5] - base[5])) <= 0.06 + 1e-9
     assert np.ptp(samples[:, 0]) > 0
-    assert np.ptp(samples[:, 5]) > 0
+    assert np.ptp(samples[:, 1]) > 0
+    np.testing.assert_array_equal(samples[:, 3:], np.repeat(base[None, 3:], 64, axis=0))
     assert np.allclose(samples[:, 2], base[2])
 
 
@@ -82,8 +82,8 @@ def test_manual_reset_does_not_override_measured_nonconvergence(monkeypatch):
 def test_current_profile_uses_the_intended_demo_set():
     from hilserl.config import load_config
     config = load_config()
-    assert config.demo_dir == "demos/fixed_xyz_roi160_v1_20260914"
-    assert config.image_profile == "insert-roi160-v1"
+    assert config.demo_dir == "demos/fixed_xyz_front_v2_command20_20260921"
+    assert config.image_profile == "insert-front-roi160-v2"
     assert config.replay_buffer_capacity == 20000
     assert config.batch_size == 128
     assert config.action_contract == "fixed-xyz-v1"

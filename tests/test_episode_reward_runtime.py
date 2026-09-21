@@ -38,6 +38,20 @@ def test_batch_receipt_stays_valid_between_commits_but_actor_heartbeat_does_not(
     assert gate.check()["pause_code"] == "waiting_episode_commit"
 
 
+@pytest.mark.parametrize("phase", ["waiting_reward", "resetting"])
+def test_released_reward_cannot_resume_updates_before_cue_and_fresh_frames(scenario, phase):
+    gate, record, state, activity, clock, _, write = scenario
+    gate.episode_activity = lambda: dict(generation="learner", gap=None, error=None, closed=False,
+        committed_episodes=1, online_count=190, released_to=record["attempt_id"])
+    state["phase"] = phase
+    write()
+    decision = gate.check()
+    assert not decision["allowed"] and decision["pause_code"] == "actor_not_collecting"
+    state["phase"] = "collecting"
+    write()
+    assert gate.check()["allowed"]
+
+
 def test_actual_learner_finishes_group_before_ack_and_keeps_receiving_during_pause(tmp_path, monkeypatch):
     from test_learner_runtime_shutdown import Runtime
     runtime = Runtime(tmp_path, monkeypatch)
@@ -163,67 +177,6 @@ class Recorder:
     def event(self, *args, **kwargs): self.events.append((args, kwargs))
 
 
-def test_reset_refresh_uses_production_transforms_without_actions_or_moving_reset_origin():
-    import copy
-    import gymnasium as gym
-    from scipy.spatial.transform import Rotation
-    from test_fixed_xyz_action_contract import RobotSubstitute, wrapper_factory
-    from franka_env.utils.transformations import construct_transform_matrix
-
-    base = RobotSubstitute()
-    env = gym.wrappers.RecordEpisodeStatistics(wrapper_factory(base)("fixed-xyz-v1").get_environment(fake_env=True))
-    initial, _ = env.reset()
-    current = env
-    path = {}
-    while isinstance(current, gym.Wrapper):
-        path[type(current).__name__] = current
-        current = current.env
-    relative, chunk = path["RelativeFrame"], path["ChunkingWrapper"]
-    origin = relative.T_r_o_inv.copy()
-    raw = base.observation()
-    raw["state"]["tcp_pose"][:3] += [.001, .002, .003]
-    raw["state"]["tcp_pose"][3:] = Rotation.from_euler("xyz", [np.pi, 0, .5]).as_quat()
-    raw["state"]["tcp_vel"] = np.arange(6, dtype=float)
-    for frame in raw["images"].values(): frame.fill(77)
-    calls = []
-    base._update_currpos = lambda: calls.append("state")
-    def get_obs():
-        calls.append("images")
-        return copy.deepcopy(raw)
-    base._get_obs = get_obs
-    try:
-        fresh = env.get_wrapper_attr("refresh_observation")()
-        assert calls == ["state", "images"] and base.resets == 1
-        assert base.steps == 0 and base.commands == [] and env.episode_lengths == 0
-        np.testing.assert_array_equal(relative.T_r_o_inv, origin)
-        np.testing.assert_allclose(relative.transform_matrix, construct_transform_matrix(raw["state"]["tcp_pose"]))
-        assert fresh["state"].shape == initial["state"].shape == (1, 19)
-        # gripper(1), force(3), pose(6), torque(3), velocity(6)
-        np.testing.assert_allclose(fresh["state"][0, 4:7], origin[:3, :3] @ [.001, .002, .003], atol=1e-7)
-        np.testing.assert_allclose(fresh["state"][0, -6:], np.linalg.inv(relative.transform_matrix) @ np.arange(6))
-        for key in ("side_policy", "wrist_1"):
-            assert np.all(fresh[key] == 77) and np.all(chunk.current_obs[0][key] == 77)
-    finally:
-        env.close()
-
-
-def test_refresh_failure_does_not_read_images_or_issue_commands():
-    from hilserl.errors import RobotStateUnavailable
-    from test_fixed_xyz_action_contract import RobotSubstitute, wrapper_factory
-    base = RobotSubstitute()
-    env = wrapper_factory(base)("fixed-xyz-v1").get_environment(fake_env=True)
-    env.reset()
-    def unavailable(): raise RobotStateUnavailable("synthetic stale state")
-    base._update_currpos = unavailable
-    base._get_obs = lambda: pytest.fail("Images must not be read after state failure")
-    try:
-        with pytest.raises(RobotStateUnavailable):
-            env.get_wrapper_attr("refresh_observation")()
-        assert base.commands == [] and base.steps == 0 and base.resets == 1
-    finally:
-        env.close()
-
-
 def test_labeled_pending_episode_recovers_without_resending_actions(tmp_path):
     from test_session_recording import ScriptedOperator
     service = EpisodeCommitServer(tmp_path / "journal", "run", "learner", SPEC, Store(), Store(),
@@ -273,6 +226,10 @@ def test_operator_stop_during_reward_wait_keeps_data_and_closes_environment(tmp_
                 check(); time.sleep(.01)
     class Environment(FakeEnvironment):
         def observation(self): return observation(self.steps + 1)
+        def reset(self, *, options):
+            value = super().reset()
+            options["hilserl_ready_barrier"](check=lambda: None)
+            return value
     class Operator(ScriptedOperator):
         def raise_if_stop(self):
             if self.state["phase"] == "draining_reward":
@@ -282,8 +239,7 @@ def test_operator_stop_during_reward_wait_keeps_data_and_closes_environment(tmp_
     pipe = EpisodeRewardPipeline(SPEC, tmp_path / "pending", tmp_path / "status.json", "run", "actor",
         SlowProvider, lambda: Transport(service), timeout=2)
     result = run_episodes(env, lambda *args: (np.zeros(3), {}), recorder, Operator(),
-                         action_contract="fixed-xyz-v1", max_episodes=1, episode_reward=pipe,
-                         refresh_observation=env.observation)
+                         action_contract="fixed-xyz-v1", max_episodes=1, episode_reward=pipe)
     assert len(result) == 1 and env.closed
     assert list((tmp_path / "pending").glob("*/labeled.pkl"))
     assert len(service.online) == 0 and not pipe.thread.is_alive()

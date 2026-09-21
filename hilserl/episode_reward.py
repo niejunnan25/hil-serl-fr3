@@ -209,22 +209,29 @@ class EpisodeRewardPipeline:
                 finally:
                     self.done.set()
 
-    def barrier(self, operator, recorder, *, final=False):
-        """Called after verified reset, or once at normal run completion."""
+    def barrier(self, operator, recorder, *, final=False, check=lambda: None):
+        """Wait after reset motion, before its ready cue; keep checking the hold."""
+        def check_wait():
+            operator.raise_if_stop(); recorder.check(); self.check()
+            check()
+            operator.raise_if_stop()
+
+        check_wait()
         if not self.thread:
             return
         started = time.monotonic()
         operator.publish("draining_reward" if final else "waiting_reward",
                          prompt="等待本条奖励计算和完整入库，录像与墙钟计时继续。")
         while not self.committed.is_set():
-            operator.raise_if_stop(); recorder.check(); self.check()
+            check_wait()
             operator.publish(reward=self.snapshot())
             self.committed.wait(0.05)
+        check_wait()
         self.release_requested.set()
         while not self.done.wait(0.05):
-            operator.raise_if_stop(); recorder.check(); self.check()
+            check_wait()
             operator.publish(reward=self.snapshot())
-        self.check()
+        check_wait()
         self.thread.join()
         elapsed = time.monotonic() - started
         self._publish(extra_wait_seconds=elapsed, final_drain=final)

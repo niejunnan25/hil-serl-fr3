@@ -23,9 +23,15 @@ DROP_GRIPPER_MIN = float(os.environ.get("DROP_GRIPPER_MIN", "0.40"))
 RESET_MOTION_EFFECTIVE_SPEED = float(os.environ.get("RESET_MOTION_EFFECTIVE_SPEED", "0.002"))
 RESET_MOTION_MAX_TIMEOUT = float(os.environ.get("RESET_MOTION_MAX_TIMEOUT", "90.0"))
 RESET_MOTION_SETTLE_TIMEOUT = float(os.environ.get("RESET_MOTION_SETTLE_TIMEOUT", "8.0"))
-RESET_POSITION_TOLERANCE = 0.012
-RESET_ROTATION_TOLERANCE = 0.12
+RESET_POSITION_TOLERANCE = 0.006
+RESET_ROTATION_TOLERANCE = 0.04
 RESET_STALL_TIMEOUT = 8.0
+RESET_STABLE_SECONDS = 0.5
+RESET_STABLE_POSITION_DRIFT = 0.0005
+RESET_STABLE_ROTATION_DRIFT = 0.005
+RESET_STABLE_DQ_MAX = 0.03
+RESET_FRAME_TIMEOUT = 2.0
+RESET_FRAME_MAX_AGE_SECONDS = 0.25
 RESET_HTTP_TIMEOUT = (2.0, 5.0)
 RESET_GRIPPER_OPEN_THRESHOLD = 0.85
 
@@ -76,7 +82,7 @@ def compute_reset_clear_pose(currpos, config):
     clear = copy.deepcopy(np.asarray(currpos, dtype=float)).reshape(7)
     configured_clear_z = getattr(config, "RESET_CLEAR_Z", None)
     if configured_clear_z is None:
-        configured_clear_z = float(config.TARGET_POSE[2] + 0.12)
+        configured_clear_z = float(config.RESET_POSE[2])
     clear[2] = max(float(clear[2]), float(configured_clear_z))
     return clear
 
@@ -140,6 +146,27 @@ class PlugInsertionEnv(FrankaEnv):
     def get_im(self):
         import cv2
         images, display, packets = {}, {}, {}
+        barrier = getattr(self, "_reset_image_barrier", None)
+        if barrier is not None:
+            after_ns, deadline, check = barrier
+            physical_cameras = {id(cap): cap for cap in self.cap.values()}
+            if not physical_cameras:
+                self._reset_failure("fresh_frames", "no_cameras")
+            while True:
+                for identity, cap in physical_cameras.items():
+                    frame = cap.read_after(after_ns, deadline=deadline, check=check)
+                    packets[identity] = (frame, dict(cap.last_read))
+                check()  # Fresh robot state after both physical cameras answered.
+                now_ns = time.monotonic_ns()
+                if all(0 <= now_ns - ref["monotonic_ns"] <= RESET_FRAME_MAX_AGE_SECONDS * 1e9
+                       for _, ref in packets.values()):
+                    break
+                if time.monotonic() >= deadline:
+                    self._reset_failure("fresh_frames", "camera_pair_not_fresh")
+                # One camera may have stalled while the other was progressing.
+                # Refresh the whole pair against a new common time boundary.
+                after_ns = now_ns
+                packets.clear()
         for key, cap in self.cap.items():
             if id(cap) not in packets:
                 packets[id(cap)] = (cap.read(), cap.last_read)
@@ -161,6 +188,18 @@ class PlugInsertionEnv(FrankaEnv):
             self.frame_references[key] = dict(reference) if reference else None
         if self.display_image:
             self.img_queue.put(display)
+        if barrier is not None:
+            check()  # _get_obs builds its state from these verified measurements.
+            now_ns = time.monotonic_ns()
+            if (time.monotonic() > deadline or any(
+                    not 0 <= now_ns - ref["monotonic_ns"] <= RESET_FRAME_MAX_AGE_SECONDS * 1e9
+                    for _, ref in packets.values())):
+                self._reset_failure("fresh_frames", "observation_not_fresh")
+            self.last_reset_info["observation"] = dict(
+                after_monotonic_ns=after_ns, verified_monotonic_ns=now_ns,
+                max_frame_age_seconds=RESET_FRAME_MAX_AGE_SECONDS,
+                frame_references=copy.deepcopy(self.frame_references),
+                state_capture=copy.deepcopy(getattr(self, "_state_capture", None)))
         return images
 
     def raw_state(self):
@@ -181,7 +220,8 @@ class PlugInsertionEnv(FrankaEnv):
                                         details={"reason": "invalid_json"}) from exc
         health = {key: value for key, value in state.items()
                   if key.endswith(("_age_seconds", "_stale", "_sequence"))
-                  or key in {"controller_running", "controller_exit_code", "pose_subscribers"}} if isinstance(state, dict) else {}
+                  or key in {"controller_running", "controller_exit_code", "pose_subscribers",
+                             "robot_mode", "robot_mode_name"}} if isinstance(state, dict) else {}
         # Legacy bridges return plausible cached numbers after ROS has died.
         # Require independent callback freshness before using a state for any
         # reset, action, or recording; HTTP response time is not sensor time.
@@ -194,6 +234,12 @@ class PlugInsertionEnv(FrankaEnv):
                     or not np.isfinite(age) or not 0 <= age <= 2.0):
                 raise RobotStateUnavailable(f"FR3 {prefix} 状态缺失或已过期，禁止复位和采集。",
                                             health=health, details={"feedback": prefix})
+        mode = state.get("robot_mode")
+        if type(mode) is not int:
+            raise RobotStateUnavailable("FR3 缺少有效运动模式，禁止复位和动作。", health=health)
+        if mode not in (1, 2):
+            self._safety_rejected_state = copy.deepcopy(state)
+            raise RuntimeError(f"[franka_safety_fatal] robot_mode={mode}; explicit recovery required")
         fields = {"currpos": "pose", "currvel": "vel", "currforce": "force",
                   "currtorque": "torque", "q": "q", "dq": "dq",
                   "curr_gripper_pos": "gripper_pos"}
@@ -215,6 +261,8 @@ class PlugInsertionEnv(FrankaEnv):
 
     def _robot_post(self, endpoint, **kwargs):
         """One bounded request; never retry an action with unknown delivery."""
+        if getattr(self, "_safety_stop_receipt", None) is not None and endpoint != "getstate":
+            raise RuntimeError("[franka_safety_fatal] safety stop is latched; restart Actor after explicit recovery")
         self._check_recording_and_stop()
         try:
             response = requests.post(self.url + endpoint, timeout=RESET_HTTP_TIMEOUT, **kwargs)
@@ -246,7 +294,53 @@ class PlugInsertionEnv(FrankaEnv):
         return response
 
     def _recover(self):
-        self._robot_post("clearerr")
+        # A normal reset must never queue automatic error recovery behind the
+        # native control loop. Real protection recovery is an explicit operation.
+        self._update_currpos()
+
+    def stop_for_safety(self, reason):
+        """Latch once, stop the owned controller, and retain the triggering sample.
+
+        Bypass recorder/operator checks: their failure must not prevent a stop.
+        A timeout means unknown delivery, never permission to retry or resume.
+        """
+        from hilserl.storage import stamp
+        receipt = getattr(self, "_safety_stop_receipt", None)
+        if receipt is not None:
+            return receipt
+        receipt = dict(reason=str(reason), requested=stamp(), stop_confirmed=False,
+                       delivery_unknown=True)
+        self._safety_stop_receipt = receipt
+        try:
+            fields = {"q": "q", "dq": "dq", "pose": "currpos", "force": "currforce",
+                      "torque": "currtorque", "command_pose": "_command_pose"}
+            receipt["sample"] = {key: np.asarray(getattr(self, attr)).tolist()
+                                 for key, attr in fields.items() if getattr(self, attr, None) is not None}
+            rejected = getattr(self, "_safety_rejected_state", None)
+            if rejected is not None:
+                receipt["sample"].update(copy.deepcopy(rejected))
+            receipt["capture"] = copy.deepcopy(getattr(self, "_state_capture", None))
+            dq = np.asarray(receipt["sample"].get("dq", []), dtype=float)
+            if dq.shape == (7,) and np.all(np.isfinite(dq)):
+                joint = int(np.argmax(np.abs(dq)))
+                receipt.update(max_speed_joint=joint + 1, max_abs_dq=float(abs(dq[joint])))
+        except Exception as exc:
+            receipt["snapshot_error"] = str(exc)
+        self._command_pose = None
+        try:
+            response = requests.post(self.url + "stopimp", timeout=(2.0, 15.0))
+            response.raise_for_status()
+            receipt["http_status"] = response.status_code
+            # A successful HTTP reply alone is insufficient evidence of stop.
+            health = requests.get(self.url + "health", timeout=RESET_HTTP_TIMEOUT).json()
+            receipt["health_after"] = health
+            receipt["stop_confirmed"] = health.get("controller_running") is False
+            receipt["delivery_unknown"] = not receipt["stop_confirmed"]
+        except Exception as exc:
+            receipt["stop_error"] = str(exc)
+        receipt["completed"] = stamp()
+        print(f"[safety_stop] {receipt}", flush=True)
+        return receipt
 
     def _check_recording_and_stop(self):
         if getattr(self, "recorder", None):
@@ -336,6 +430,8 @@ class PlugInsertionEnv(FrankaEnv):
                     raise RuntimeError(f"[franka_safety_fatal] {attr}={value} > {getattr(self, limit_attr)}")
             obs, reward, done, truncated, info = super().step(action)
         except BaseException as exc:
+            if "[franka_safety_fatal]" in str(exc):
+                self.stop_for_safety(exc)
             if self.recorder:
                 self.recorder.event("step_interrupted", error=type(exc).__name__,
                                     commands=[{**c, **({"pose": c["pose"].tolist()} if "pose" in c else {})}
@@ -391,9 +487,11 @@ class PlugInsertionEnv(FrankaEnv):
             self._reset_last_publish = now
             if getattr(self, "operator", None):
                 label = {"precheck": "检查夹爪和关节", "prepare": "准备控制器",
-                         "clear": "垂直拔出", "reset_pose": "移动到起始位姿",
-                         "verify": "验证复位结果", "ready": "复位完成"}.get(phase, phase)
-                self.operator.publish("resetting", reset=snapshot,
+                         "clear": "1/2 垂直拔出", "reset_pose": "2/2 回到随机起点",
+                         "notifying": "复位完成，手柄震动提醒（0.8 秒）",
+                         "verify": "验证复位结果", "reward_wait": "保持稳定，等待奖励入库",
+                         "fresh_frames": "确认状态与新图像", "ready": "复位完成"}.get(phase, phase)
+                self.operator.publish("waiting_reward" if phase == "reward_wait" else "resetting", reset=snapshot,
                                       prompt=f"复位：{label} · {info['elapsed_seconds']:.1f} 秒")
             if getattr(self, "recorder", None):
                 self.recorder.event("reset_progress", reset=snapshot)
@@ -406,13 +504,16 @@ class PlugInsertionEnv(FrankaEnv):
         print(message, flush=True)
         raise RuntimeError(message)
 
-    def reset(self, **kwargs):
+    def reset(self, *, options=None, **kwargs):
         """Hold the plug, clear vertically, then move to the sampled reset pose.
 
         Gripper width is a plausibility precheck, not proof of a secure grasp.
         Failed checks and motion stages always stop; RESET_STRICT/MANUAL_RESET
         cannot override measured convergence or grant permission to collect.
         """
+        # Gym wrappers forward only seed/options. Keep this callback transient;
+        # it is never written into config snapshots or reset evidence.
+        ready_barrier = (options or {}).get("hilserl_ready_barrier")
         self._reset_started = time.monotonic()
         self._step_commands = []
         self._reset_phase_started = self._reset_started
@@ -454,23 +555,51 @@ class PlugInsertionEnv(FrankaEnv):
                 )
             else:
                 print("[reset_fixed] using configured RESET_POSE", flush=True)
+            # Recheck withdrawal immediately before permitting lateral motion.
+            self._check_reset_hold(self._last_reset_actual, "clear")
             reset_err = self.interpolate_move(reset_pose, timeout=8.0, name="reset_pose")
             self._require_reset_settled("reset_pose", reset_err)
 
+            anchor = self._last_reset_actual.copy()
             self._reset_progress("verify", force=True)
-            self._update_currpos()
-            self._require_joint_limit_margin()
-            self._require_plug_held()
-            # Do not call the base reset: it would move the robot for a second time.
+            self._check_reset_hold(anchor, "verify")
+            # Do not call the base reset: it would move the robot a second time.
             self.curr_path_length = 0
             self.terminate = False
             self.success = False
             self._insertion_started = False
             self._contact_detected = False
-            self._check_recording_and_stop()
-            obs = self._get_obs()
-            self._check_recording_and_stop()
             self._reset_progress("verify", state="passed", force=True)
+            if ready_barrier is not None:
+                # Motion overlaps reward inference. The single ready cue and
+                # the strict fresh-camera barrier must follow the replay ACK.
+                self._reset_progress("reward_wait", force=True)
+                check = lambda: self._check_reset_hold(anchor, "reward_wait")
+                check()
+                ready_barrier(check=check)
+                check()
+                self._reset_progress("reward_wait", state="passed", force=True)
+            if getattr(self.config, "RESET_FEEDBACK", False):
+                from hilserl.reset_feedback import rumble_once
+                self._reset_progress("notifying", force=True)
+                # The completed motion's stability window remains under watch
+                # throughout the cue. No new movement or second pulse on error.
+                receipt = rumble_once(check=lambda: self._check_reset_hold(anchor, "notifying"))
+                self.last_reset_info["feedback"] = receipt
+                self._reset_progress("notifying", state="passed", force=True, feedback=receipt)
+            self._reset_progress("fresh_frames", force=True)
+            self._check_reset_hold(anchor, "fresh_frames")
+            # Every physical camera must produce a frame after this post-cue
+            # boundary. get_im also refreshes/verifies robot state before _get_obs
+            # constructs the observation; no env.step/reset is used to refresh.
+            self._reset_image_barrier = (time.monotonic_ns(), time.monotonic() + RESET_FRAME_TIMEOUT,
+                                        lambda: self._check_reset_hold(anchor, "fresh_frames"))
+            try:
+                obs = self._get_obs()
+            finally:
+                del self._reset_image_barrier
+            self._check_recording_and_stop()
+            self._reset_progress("fresh_frames", state="passed", force=True)
             self.last_reset_info.update(success=True, state="succeeded")
             evidence = self._reset_progress("ready", state="passed", force=True)
             return obs, {"succeed": False, "reset": evidence}
@@ -519,10 +648,51 @@ class PlugInsertionEnv(FrankaEnv):
 
     def _require_reset_settled(self, name, err):
         pos_err, rot_err = (float(value) for value in err)
+        pos_tol = RESET_POSITION_TOLERANCE
         if (not np.isfinite(pos_err) or not np.isfinite(rot_err)
-                or pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE):
+                or pos_err > pos_tol or rot_err > RESET_ROTATION_TOLERANCE):
             self._reset_failure(name, "not_converged", position_error_m=pos_err,
                                 rotation_error_rad=rot_err)
+
+    def _read_reset_measurement(self, goal, name):
+        """Shared checks for motion, the cue, and the first observation."""
+        self._check_recording_and_stop()
+        self._update_currpos()
+        curr = np.asarray(self.currpos, dtype=float).reshape(7).copy()
+        if not np.all(np.isfinite(curr)) or np.linalg.norm(curr[3:]) < 1e-9:
+            self._reset_failure(name, "invalid_measured_pose")
+        self._require_plug_held()
+        self._require_joint_limit_margin(self.q)
+        pos_err = float(np.linalg.norm(goal[:3] - curr[:3]))
+        rot_err = float(np.linalg.norm(
+            (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()))
+        for attr, limit_attr in (("currforce", "safety_force_max"), ("dq", "safety_dq_max")):
+            values = np.asarray(getattr(self, attr), dtype=float)
+            expected_shape = (3,) if attr == "currforce" else (7,)
+            if values.shape != expected_shape or not np.all(np.isfinite(values)):
+                self._reset_failure(name, "invalid_measurement", measurement=attr)
+            value = float(np.linalg.norm(values) if attr == "currforce" else np.max(np.abs(values)))
+            if value > float(getattr(self, limit_attr)):
+                self._reset_failure(name, "safety_limit", measurement=attr,
+                                    value=value, limit=float(getattr(self, limit_attr)))
+        return curr, pos_err, rot_err
+
+    def _check_reset_hold(self, anchor, phase):
+        """Read only: loss of the established stable pose aborts readiness."""
+        goal = self._last_reset_goal
+        curr, pos_err, rot_err = self._read_reset_measurement(goal, phase)
+        self._require_reset_settled(phase, (pos_err, rot_err))
+        drift = float(np.linalg.norm(curr[:3] - anchor[:3]))
+        turn = float(np.linalg.norm((Rotation.from_quat(curr[3:]) *
+                                    Rotation.from_quat(anchor[3:]).inv()).as_rotvec()))
+        dq_max = float(np.max(np.abs(self.dq)))
+        if (dq_max > RESET_STABLE_DQ_MAX or drift > RESET_STABLE_POSITION_DRIFT
+                or turn > RESET_STABLE_ROTATION_DRIFT):
+            self._reset_failure(phase, "lost_stability", joint_speed_rad_s=dq_max,
+                                position_drift_m=drift, rotation_drift_rad=turn)
+        self._reset_progress(phase, state="converged" if phase == "clear" else "running",
+                             actual_pose=curr.tolist(), target_pose=goal.tolist(),
+                             position_error_m=pos_err, rotation_error_rad=rot_err)
 
     # ----------------------------------------------------------
     # 辅助：线性插值移动
@@ -544,7 +714,10 @@ class PlugInsertionEnv(FrankaEnv):
         if max_z_step is not None:
             max_step = min(max_step, getattr(self, "action_max_step", .008))
         max_rot_step = 0.05
-        pos_tol, rot_tol = 0.004, 0.04
+        # Use the same 6 mm position tolerance for withdrawal and final reset.
+        # Verified withdrawal still precedes lateral motion; stability is required.
+        pos_tol = RESET_POSITION_TOLERANCE
+        rot_tol = RESET_ROTATION_TOLERANCE
         self._reset_progress(name, force=True, target_pose=goal.tolist())
         try:
             if not np.all(np.isfinite(goal)) or np.linalg.norm(goal[3:]) < 1e-9:
@@ -555,26 +728,7 @@ class PlugInsertionEnv(FrankaEnv):
                 self._reset_failure(name, "invalid_motion_timing")
 
             def measured():
-                self._check_recording_and_stop()
-                self._update_currpos()
-                curr = np.asarray(self.currpos, dtype=float).reshape(7)
-                if not np.all(np.isfinite(curr)) or np.linalg.norm(curr[3:]) < 1e-9:
-                    self._reset_failure(name, "invalid_measured_pose")
-                self._require_plug_held()
-                self._require_joint_limit_margin(self.q)
-                pos_err = float(np.linalg.norm(goal[:3] - curr[:3]))
-                rot_err = float(np.linalg.norm(
-                    (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
-                ))
-                # Apply the same measured force/joint-speed limits as env.step.
-                for attr, limit_attr in (("currforce", "safety_force_max"), ("dq", "safety_dq_max")):
-                    if hasattr(self, attr) and hasattr(self, limit_attr):
-                        values = np.asarray(getattr(self, attr), dtype=float)
-                        value = float(np.linalg.norm(values) if attr == "currforce" else np.max(np.abs(values)))
-                        if not np.isfinite(value) or value > float(getattr(self, limit_attr)):
-                            self._reset_failure(name, "safety_limit", measurement=attr,
-                                                value=value, limit=float(getattr(self, limit_attr)))
-                return curr, pos_err, rot_err
+                return self._read_reset_measurement(goal, name)
 
             def bounded_target(curr):
                 dxyz = goal[:3] - curr[:3]
@@ -628,7 +782,7 @@ class PlugInsertionEnv(FrankaEnv):
                     last_progress = now
                 report(curr, pos_err, rot_err)
                 if (now - last_progress >= RESET_STALL_TIMEOUT
-                        and (pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE)):
+                        and (pos_err > pos_tol or rot_err > rot_tol)):
                     self._reset_failure(name, "stalled", position_error_m=pos_err,
                                         rotation_error_rad=rot_err,
                                         no_progress_seconds=now - last_progress)
@@ -636,46 +790,56 @@ class PlugInsertionEnv(FrankaEnv):
             report(curr, pos_err, rot_err, force=True)
             print(f"[reset_motion] {name} timeout={adaptive_timeout:.1f}s "
                   f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}", flush=True)
-            while time.monotonic() < deadline:
-                curr, pos_err, rot_err = measured()
-                check_progress(curr, pos_err, rot_err)
-                if pos_err < pos_tol and rot_err < rot_tol:
-                    break
-                if (time.monotonic() - last_progress >= RESET_STALL_TIMEOUT
-                        and pos_err <= RESET_POSITION_TOLERANCE and rot_err <= RESET_ROTATION_TOLERANCE):
-                    break
-                self._send_pos_command(bounded_target(curr))
-                time.sleep(min(1.0 / self.hz, max(0.0, deadline - time.monotonic())))
+            stable_since, stable_anchor, stable_limits = None, None, None
 
-            curr, pos_err, rot_err = measured()
-            check_progress(curr, pos_err, rot_err)
-            exact_goal_allowed = pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
-            if not exact_goal_allowed and (pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE):
-                self._reset_failure(name, "timeout", position_error_m=pos_err,
-                                    rotation_error_rad=rot_err, timeout_seconds=adaptive_timeout)
+            def stable(curr, pos_err, rot_err, limits):
+                nonlocal stable_since, stable_anchor, stable_limits
+                dq = np.asarray(self.dq, dtype=float)
+                eligible = (pos_err <= limits[0] and rot_err <= limits[1]
+                            and dq.shape == (7,) and np.all(np.isfinite(dq))
+                            and float(np.max(np.abs(dq))) <= RESET_STABLE_DQ_MAX)
+                if not eligible:
+                    stable_since, stable_anchor, stable_limits = None, None, None
+                    return False
+                if stable_anchor is not None:
+                    drift = float(np.linalg.norm(curr[:3] - stable_anchor[:3]))
+                    turn = float(np.linalg.norm((Rotation.from_quat(curr[3:]) *
+                                 Rotation.from_quat(stable_anchor[3:]).inv()).as_rotvec()))
+                else:
+                    drift, turn = float("inf"), float("inf")
+                if (stable_limits != limits or drift > RESET_STABLE_POSITION_DRIFT
+                        or turn > RESET_STABLE_ROTATION_DRIFT):
+                    stable_since, stable_anchor, stable_limits = time.monotonic(), curr.copy(), limits
+                return time.monotonic() - stable_since >= RESET_STABLE_SECONDS
 
-            # Retain the existing short exact-goal hold only when already nearby.
-            hold_deadline = time.monotonic() + (0.5 if exact_goal_allowed else 0.0)
-            while time.monotonic() < hold_deadline:
-                self._send_pos_command(bounded_target(curr))
-                time.sleep(min(1.0 / self.hz, max(0.0, hold_deadline - time.monotonic())))
-                curr, pos_err, rot_err = measured()
-                check_progress(curr, pos_err, rot_err)
-
-            settle_deadline = time.monotonic() + RESET_MOTION_SETTLE_TIMEOUT
+            settling = False
             while True:
                 curr, pos_err, rot_err = measured()
                 check_progress(curr, pos_err, rot_err)
-                if pos_err <= RESET_POSITION_TOLERANCE and rot_err <= RESET_ROTATION_TOLERANCE:
+                now = time.monotonic()
+                # Neither timeout nor a stalled controller can lower the
+                # clearance/accuracy requirement for either reset stage.
+                limits = (pos_tol, rot_tol)
+                if stable(curr, pos_err, rot_err, limits):
                     report(curr, pos_err, rot_err, state="converged", force=True)
+                    self._reset_progress(name, state="converged", force=True,
+                        stable_seconds=now - stable_since,
+                        completion_position_tolerance_m=limits[0],
+                        completion_rotation_tolerance_rad=limits[1],
+                        completion_criterion="stable_target")
                     print(f"[reset_dbg] {name} target_z={goal[2]:.4f} actual_z={curr[2]:.4f} "
                           f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}", flush=True)
+                    self._last_reset_actual = curr.copy()
                     return pos_err, rot_err
-                if time.monotonic() >= settle_deadline:
-                    self._reset_failure(name, "not_converged", position_error_m=pos_err,
-                                        rotation_error_rad=rot_err, timeout_seconds=adaptive_timeout)
+                if now >= deadline:
+                    if settling or pos_err > pos_tol or rot_err > rot_tol:
+                        self._reset_failure(name, "not_stable" if settling else "timeout",
+                            position_error_m=pos_err, rotation_error_rad=rot_err,
+                            timeout_seconds=adaptive_timeout)
+                    settling = True
+                    deadline = now + RESET_MOTION_SETTLE_TIMEOUT
                 self._send_pos_command(bounded_target(curr))
-                time.sleep(min(0.2, max(0.0, settle_deadline - time.monotonic())))
+                time.sleep(min(1.0 / self.hz, max(0.0, deadline - time.monotonic())))
         except BaseException as exc:
             if self.last_reset_info.get("state") not in ("failed", "cancelled"):
                 state = "cancelled" if type(exc).__name__ in ("StopRequested", "KeyboardInterrupt") else "failed"

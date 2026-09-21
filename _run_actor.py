@@ -643,9 +643,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
                                 emit=emit, on_episode=episode_finished,
                                 before_step=lambda obs, step: _check_runtime_safety(obs, step, base.raw_state()["values"]),
                                 on_exit=(lambda: flush_buffers(final=True)) if mode == "train" else lambda: None,
-                                episode_reward=reward_pipeline,
-                                refresh_observation=(env.get_wrapper_attr("refresh_observation")
-                                                     if reward_pipeline is not None else None))
+                                episode_reward=reward_pipeline)
         if mode == "eval":
             import json
             from hilserl.checkpoint_scores import record_evaluation

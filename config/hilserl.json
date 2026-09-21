@@ -5,6 +5,8 @@
   "action_contract": "fixed-xyz-v1",
   "action_max_z_step": 0.016,
   "random_rz_range": 0.0,
+  "reset_clear_z": 0.15,
+  "reset_feedback": true,
   "position_target_mode": "command-relative-v1",
   "image_profile": "insert-front-roi160-v2",
   "replay_buffer_capacity": 20000,

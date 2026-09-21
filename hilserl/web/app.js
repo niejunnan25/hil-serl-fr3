@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const phases = {starting:'正在初始化',waiting_actor:'等待 Actor 策略握手',stopping_learner:'正在请求 Learner 停止',waiting_reset:'等待复位',waiting_controller:'等待 Xbox RB',resetting:'正在复位',collecting:'正在采集',awaiting_label:'等待人工裁决',paused:'Actor 已暂停',fault:'记录或设备需要处理',degraded:'任务已降级',stopped:'任务已停止',legacy_running:'旧入口正在运行'};
 let status=null, replayId=null, detail=null, timelines={}, players={}, segments={}, syncing=false, gripperBusy=false, controllerPending=null, learnerPending=false;
 const names={wrist_1:'腕部视角',side_policy:'侧面视角'};
-Object.assign(phases,{reward_pending:'正在处理奖励',waiting_reward:'复位完成，等待奖励入库',draining_reward:'正在保存最后一条奖励'});
+Object.assign(phases,{reward_pending:'正在处理奖励',waiting_reward:'等待奖励计算与入库',draining_reward:'正在保存最后一条奖励'});
 function rewardDescription(reward){
   if(!reward)return '';
   const labels={idle:'奖励模型就绪',collecting:'正在暂存本条轨迹',waiting_learner:'等待 Learner 完成本次更新',scoring:'正在批量计算奖励',awaiting_label:'计奖完成，等待人工结果',committing:'正在提交完整轨迹',committed:'轨迹已入库，等待复位完成',released:'奖励与入库已完成',pending_recovery:'奖励处理暂停，数据已保留',incomplete:'不完整轨迹已单独保留'};
@@ -60,7 +60,8 @@ function learnerDisplay(learner,device,runtime,policy,candidate){
 function lockLearnerActions(){for(const id of ['start','start-learner','resume-learner','learner-activity','start-actor','stop-learner'])$(id).disabled=true;}
 function resetDetail(reset){
   if(!reset)return '';
-  const parts=[reset.phase==='clear'?'垂直抬升':reset.phase==='reset_pose'?'移动到起始位姿':'复位检查'];
+  const labels={clear:'1/2 垂直拔出',reset_pose:'2/2 回到随机起点',reward_wait:'复位到位 · 等待奖励入库',notifying:'复位完成 · 手柄震动 0.8 秒',fresh_frames:'确认状态与新图像',ready:'复位完成 · 即将开始'};
+  const parts=[labels[reset.phase]||'复位检查'];
   if(Number.isFinite(reset.elapsed_seconds))parts.push('已用 '+reset.elapsed_seconds.toFixed(1)+' 秒');
   const phase=reset.phases?.at(-1);
   if(Number.isFinite(phase?.position_error_m))parts.push('位置误差 '+(phase.position_error_m*1000).toFixed(1)+' mm');

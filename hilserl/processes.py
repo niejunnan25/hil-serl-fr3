@@ -543,7 +543,12 @@ class Manager:
         # Retention is the current storage policy, not a learned-model setting.
         # Historical model/data settings stay frozen; each new attempt records
         # the actual storage policy without rewriting the old run snapshot.
-        cfg = replace(cfg, checkpoint_keep=self.config.checkpoint_keep)
+        # Reset is the current operator-approved motion/feedback protocol. Apply
+        # it to both roles, including resumed/evaluation attempts, and record it
+        # here without rewriting the historical model's run/config.json.
+        cfg = replace(cfg, checkpoint_keep=self.config.checkpoint_keep,
+                      reset_clear_z=self.config.reset_clear_z,
+                      reset_feedback=self.config.reset_feedback)
         attempt_id = uuid.uuid4().hex
         attempt = run / "attempts" / attempt_id
         attempt.mkdir(parents=True, exist_ok=False)

@@ -118,6 +118,33 @@ class VideoCapture:
             raise RuntimeError(f"Camera acquisition failed: {self.name}")
         return frame
 
+    def read_after(self, after_monotonic_ns: int, *, deadline: float, check) -> np.ndarray:
+        """Wait for a post-boundary frame without blocking capture or cancellation.
+
+        The deadline is shared by both reset cameras. Timestamps describe SDK
+        read completion, not hardware exposure synchronization.
+        """
+        if not self.continuous:
+            raise RuntimeError(f"Fresh reset frames require continuous capture: {self.name}")
+        while True:
+            # May read robot state; never run this callback under the camera lock.
+            check()
+            with self._condition:
+                if self._error:
+                    raise RuntimeError(f"Camera {self.name}: {self._error}") from self._error
+                if self._stop.is_set():
+                    raise RuntimeError(f"Camera stopped: {self.name}")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"Timed out waiting for a fresh reset frame: {self.name}")
+                if self._latest is not None:
+                    frame, capture = self._latest
+                    if (capture["monotonic_ns"] > after_monotonic_ns
+                            and 0 <= time.monotonic_ns() - capture["monotonic_ns"] <= 2_000_000_000):
+                        self.last_read = dict(capture)
+                        return frame.copy()
+                self._condition.wait(timeout=min(.05, remaining))
+
     def close(self) -> None:
         """Release camera resources.  Delegates to the inner capture."""
         if self._stop.is_set():

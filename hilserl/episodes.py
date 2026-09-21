@@ -49,7 +49,7 @@ def run_episodes(env, sample_action, recorder, operator, *, mode="train", max_ep
                  max_total_steps=100000, max_episodes=None, emit=lambda transition: None,
                  on_episode=lambda summary: None, before_step=lambda obs, step: None,
                  on_exit=lambda: None, action_contract=LEGACY, image_profile="full-frame128-v1", eval_seed=None,
-                 episode_reward=None, refresh_observation=None):
+                 episode_reward=None):
     """No device step occurs in waiting/reset-label phases.
 
 One replay transition is held until the next decision boundary, so a label arriving
@@ -76,8 +76,6 @@ between ticks can terminate the last real step without sending an additional act
 
     try:
         if episode_reward is not None:
-            if not callable(refresh_observation):
-                raise ValueError("Episode reward mode requires an action-free observation refresh")
             episode_reward.recover(operator, recorder)
         while global_step < max_total_steps and (max_episodes is None or len(completed) < max_episodes):
             pending = None
@@ -106,8 +104,17 @@ between ticks can terminate the last real step without sending an additional act
                     # The next evaluation case is stable even after a failed
                     # reset or an incomplete recovery episode is retried.
                     np.random.seed((int(eval_seed) + len(completed)) % 2**32)
-                obs, reset_info = env.reset()
+                reward_ready = False
+                def ready_barrier(*, check):
+                    nonlocal reward_ready
+                    episode_reward.barrier(operator, recorder, check=check)
+                    reward_ready = True
+
+                obs, reset_info = (env.reset(options={"hilserl_ready_barrier": ready_barrier})
+                                   if episode_reward is not None else env.reset())
                 recorder.check()
+                if episode_reward is not None and not reward_ready:
+                    raise RuntimeError("Environment skipped the reward-ready barrier; collection blocked")
                 # `succeed` is the task reward flag, not evidence of reset success.
                 # A returned observation alone must never open a collection window.
                 reset = reset_info.get("reset") if isinstance(reset_info, dict) else None
@@ -116,13 +123,6 @@ between ticks can terminate the last real step without sending an additional act
                     raise RuntimeError("复位未通过到位验证，禁止开始采集；请查看复位诊断。")
                 operator.raise_if_stop()
                 recorder.event("reset_verified", reset=_plain_info(reset))
-                if episode_reward is not None:
-                    episode_reward.barrier(operator, recorder)
-                    operator.raise_if_stop()
-                    obs = refresh_observation()
-                    check_recording()
-                    operator.raise_if_stop()
-                    recorder.event("observation_refreshed", after_reward_barrier=True)
                 episode_id = recorder.start_episode(mode=mode, reset_info=_plain_info(reset_info),
                                                     action_contract=contract.name, image_profile=image_profile)
                 if episode_reward is not None:
@@ -303,8 +303,20 @@ between ticks can terminate the last real step without sending an additional act
         reason = "operator_stop"
     except Exception as exc:
         reason = str(exc)
+        safety_stop = None
+        if (any(tag in reason for tag in ("[franka_safety_fatal]", "[actor_safety_fatal]"))
+                or (getattr(exc, "reset_info", None) or {}).get("reason") == "safety_limit"):
+            stop = getattr(base, "stop_for_safety", None)
+            if callable(stop):
+                # Stop before any recorder operation that could itself fail.
+                safety_stop = stop(reason)
+                try:
+                    recorder.event("safety_stop", **_plain_info(safety_stop))
+                except Exception as record_error:
+                    print(f"[safety_stop_record_error] {record_error}", flush=True)
         recorder.fail(reason)
-        operator.publish("fault", error=reason, prompt="Actor 已暂停。处理记录或设备问题后可重新启动；已有数据保留。")
+        operator.publish("fault", error=reason, safety_stop=_plain_info(safety_stop),
+                         prompt="Actor 已停止。检查故障与停控结果后显式恢复；已有数据保留。")
         raise
     finally:
         # Stop camera producers before completing encoder queues. Never reset here.
