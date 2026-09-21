@@ -264,8 +264,20 @@ between ticks can terminate the last real step without sending an additional act
         reason = "operator_stop"
     except Exception as exc:
         reason = str(exc)
+        safety_stop = None
+        if (any(tag in reason for tag in ("[franka_safety_fatal]", "[actor_safety_fatal]"))
+                or (getattr(exc, "reset_info", None) or {}).get("reason") == "safety_limit"):
+            stop = getattr(base, "stop_for_safety", None)
+            if callable(stop):
+                # Stop before any recorder operation that could itself fail.
+                safety_stop = stop(reason)
+                try:
+                    recorder.event("safety_stop", **_plain_info(safety_stop))
+                except Exception as record_error:
+                    print(f"[safety_stop_record_error] {record_error}", flush=True)
         recorder.fail(reason)
-        operator.publish("fault", error=reason, prompt="Actor 已暂停。处理记录或设备问题后可重新启动；已有数据保留。")
+        operator.publish("fault", error=reason, safety_stop=_plain_info(safety_stop),
+                         prompt="Actor 已停止。检查故障与停控结果后显式恢复；已有数据保留。")
         raise
     finally:
         # Stop camera producers before completing encoder queues. Never reset here.

@@ -50,7 +50,8 @@ function learnerDisplay(learner,device,runtime,policy,candidate){
 function lockLearnerActions(){for(const id of ['start','start-learner','resume-learner','learner-activity','start-actor','stop-learner'])$(id).disabled=true;}
 function resetDetail(reset){
   if(!reset)return '';
-  const parts=[reset.phase==='clear'?'垂直抬升':reset.phase==='reset_pose'?'移动到起始位姿':'复位检查'];
+  const labels={clear:'1/2 垂直拔出',reset_pose:'2/2 回到随机起点',notifying:'复位完成 · 手柄震动 0.8 秒',fresh_frames:'确认状态与新图像',ready:'复位完成 · 即将开始'};
+  const parts=[labels[reset.phase]||'复位检查'];
   if(Number.isFinite(reset.elapsed_seconds))parts.push('已用 '+reset.elapsed_seconds.toFixed(1)+' 秒');
   const phase=reset.phases?.at(-1);
   if(Number.isFinite(phase?.position_error_m))parts.push('位置误差 '+(phase.position_error_m*1000).toFixed(1)+' mm');

@@ -65,7 +65,7 @@ def test_config_cannot_inherit_hidden_safety_overrides(cfg,monkeypatch):
     env=cfg.environment("actor",run_dir=cfg.root/"run")
     assert env["FRANKA_SAFETY_FORCE_MAX"]=="45.0"
     assert env["FRANKA_CLEARERR_ON_POSE"]=="0"
-    assert env["HILSERL_RESET_CLEAR_Z"]=="0.2095"
+    assert env["HILSERL_RESET_CLEAR_Z"]=="0.15"
     assert env["ACTOR_RELZ_ABS_MAX"]=="0.35"
 
 
@@ -334,3 +334,28 @@ def test_status_converges_finished_learner_stop(cfg, monkeypatch):
 
     assert status["launch"]["phase"] == "stopped"
     assert status["launch"]["reason"] == "Learner 已退出；最终保存结果请查看日志"
+
+
+@pytest.mark.parametrize('role,mode', [('actor','train'), ('actor','eval'), ('learner','train')])
+def test_new_attempt_applies_current_reset_protocol_without_rewriting_history(cfg, monkeypatch, role, mode):
+    monkeypatch.setattr('hilserl.processes.process_start', lambda pid: 'same')
+    spawned = []
+    monkeypatch.setattr('hilserl.processes.subprocess.Popen',
+                        lambda *args, **kw: spawned.append(kw) or SimpleNamespace(pid=321))
+    historical = replace(cfg, reset_clear_z=.2095, reset_feedback=False)
+    current = replace(cfg, reset_clear_z=.15, reset_feedback=True)
+    manager = Manager(current)
+    manager.launch_state = {"request_id": "test-reset"}
+    run = manager._new_run("train", config=historical)
+    (run/"checkpoints").mkdir()
+    (run/"checkpoints/checkpoint_0").write_bytes(b"mock checkpoint")
+    before = (run/'config.json').read_bytes()
+    manager._spawn(role, run, run/'checkpoints', historical, mode=mode)
+    env = spawned[0]['env']
+    assert env['HILSERL_RESET_CLEAR_Z'] == '0.15'
+    assert env['HILSERL_RESET_FEEDBACK'] == '1'
+    effective = json.loads(Path(env['HILSERL_CONFIG_SNAPSHOT']).read_text())
+    assert effective['reset_clear_z'] == .15 and effective['reset_feedback'] is True
+    assert effective['image_profile'] == historical.image_profile
+    assert effective['action_contract'] == historical.action_contract
+    assert (run/'config.json').read_bytes() == before

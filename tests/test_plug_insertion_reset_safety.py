@@ -71,6 +71,9 @@ class _Clock:
     def monotonic(self):
         return self.now
 
+    def monotonic_ns(self):
+        return round(self.now * 1_000_000_000)
+
     def sleep(self, seconds):
         assert seconds >= 0
         self.now += seconds
@@ -351,7 +354,7 @@ def test_actual_state_reader_and_pose_sender_preserve_wire_contract(monkeypatch)
     env._step_commands = []
     state = dict(pose=env.currpos.tolist(), vel=[0.] * 6, force=[1., 2., 3.],
                  torque=[4., 5., 6.], q=env.q.tolist(), dq=[0.] * 7,
-                 jacobian=[0.] * 42, gripper_pos=.567, controller_running=True,
+                 jacobian=[0.] * 42, gripper_pos=.567, controller_running=True, robot_mode=2,
                  state_age_seconds=.01, state_stale=False,
                  jacobian_age_seconds=.01, jacobian_stale=False,
                  gripper_state_age_seconds=.01, gripper_state_stale=False)

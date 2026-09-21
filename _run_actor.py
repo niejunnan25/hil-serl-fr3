@@ -1065,7 +1065,7 @@ def _main(_, resources):
                                    segment_seconds=int(os.environ.get("HILSERL_VIDEO_SEGMENT_SECONDS", "60")))
         operator = OperatorControl(os.environ.get("HILSERL_CONTROL_DIR"))
         resources.update(recorder=recorder, operator=operator)
-    env = config.get_environment(fake_env=FLAGS.learner, save_video=False, classifier=True,
+    env = config.get_environment(fake_env=FLAGS.learner, save_video=False, classifier=(mode != "collect"),
                                  recorder=recorder, operator=operator, mode=mode)
     env = RecordEpisodeStatistics(env)
     resources["env"] = env
@@ -1190,7 +1190,10 @@ def _main(_, resources):
                 raise ValueError("fixed-xyz-v1 requires a pinned seed dataset SHA-256")
             for transition in iter_seed_transitions(os.environ["HILSERL_SEED_DATASET"],
                     expected_action_contract=config.action_contract, expected_manifest_sha256=seed_digest,
-                    expected_image_profile=config.image_profile):
+                    expected_image_profile=config.image_profile,
+                    expected_action_max_z_step=(float(os.environ["HILSERL_ACTION_MAX_Z_STEP"])
+                                               if "HILSERL_ACTION_MAX_Z_STEP" in os.environ else None),
+                    expected_position_target_mode=os.environ.get("HILSERL_POSITION_TARGET_MODE", "measured-relative-v1")):
                 check_learner_stop()
                 demo_buffer.insert(transition)
         else:

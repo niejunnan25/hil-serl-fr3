@@ -486,7 +486,9 @@ class Manager:
                         raise ValueError("fixed-xyz-v1 缺少已核验的示范集 SHA-256")
                     seed_manifest = validate_seed_dataset(cfg.path(cfg.demo_dir), expected_action_contract=cfg.action_contract,
                                                           expected_manifest_sha256=cfg.seed_dataset_sha256,
-                                                          expected_image_profile=cfg.image_profile)
+                                                          expected_image_profile=cfg.image_profile,
+                                                          expected_action_max_z_step=cfg.action_max_z_step,
+                                                          expected_position_target_mode=cfg.position_target_mode)
                     demo_count = seed_manifest["counts"]["episodes"]
                     demo_transition_count = seed_manifest["counts"]["transitions"]
                 except (OSError, ValueError, RuntimeError) as exc:
@@ -519,7 +521,12 @@ class Manager:
         # Retention is the current storage policy, not a learned-model setting.
         # Historical model/data settings stay frozen; each new attempt records
         # the actual storage policy without rewriting the old run snapshot.
-        cfg = replace(cfg, checkpoint_keep=self.config.checkpoint_keep)
+        # Reset is the current operator-approved motion/feedback protocol. Apply
+        # it to both roles, including resumed/evaluation attempts, and record it
+        # here without rewriting the historical model's run/config.json.
+        cfg = replace(cfg, checkpoint_keep=self.config.checkpoint_keep,
+                      reset_clear_z=self.config.reset_clear_z,
+                      reset_feedback=self.config.reset_feedback)
         attempt_id = uuid.uuid4().hex
         attempt = run / "attempts" / attempt_id
         attempt.mkdir(parents=True, exist_ok=False)

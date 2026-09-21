@@ -158,6 +158,14 @@ class EnvConfig(DefaultEnvConfig):
 
     def __init__(self):
         from hilserl.image_profile import get_image_profile
+        from hilserl.motion_limits import seed_execution_contract
+        self.ACTION_MAX_Z_STEP = (float(os.environ["HILSERL_ACTION_MAX_Z_STEP"])
+                                 if "HILSERL_ACTION_MAX_Z_STEP" in os.environ else None)
+        self.POSITION_TARGET_MODE = os.environ.get("HILSERL_POSITION_TARGET_MODE", "measured-relative-v1")
+        seed_execution_contract(self.ACTION_MAX_Z_STEP, self.POSITION_TARGET_MODE)
+        self.ACTION_SCALE = self.ACTION_SCALE.copy()
+        if self.ACTION_MAX_Z_STEP is not None:
+            self.ACTION_SCALE[2] = self.ACTION_MAX_Z_STEP
         self.IMAGE_PROFILE = os.environ.get("HILSERL_IMAGE_PROFILE", "full-frame128-v1")
         profile = get_image_profile(self.IMAGE_PROFILE)
         self.IMAGE_SIZES = {key: tuple(spec["size"]) for key, spec in profile["cameras"].items()}
@@ -214,11 +222,10 @@ class EnvConfig(DefaultEnvConfig):
         0.07049,        # yaw
     ])
 
-    # Insert-only demo recollection clear height. The older TARGET_POSE[2]+0.12
-    # target (0.2555m) repeatedly stalled at z~=0.2093 on 2026-06-24 despite clean
-    # reflex/contact flags. Keep this explicit and operator-reviewable instead of
-    # deriving it from seated z.
-    RESET_CLEAR_Z = float(os.environ.get("HILSERL_RESET_CLEAR_Z", "0.2095"))
+    # Withdraw vertically to the same Z as the randomized start. If already
+    # higher, the clear stage holds that height instead of moving down to unplug.
+    RESET_CLEAR_Z = float(os.environ.get("HILSERL_RESET_CLEAR_Z", "0.1500"))
+    RESET_FEEDBACK = _env_bool("HILSERL_RESET_FEEDBACK", False)
 
     # -- 复位位姿 = closer insertion-start for the 2026-06-18 local-5080 policy line
     #    (above the socket, ~1.5cm up, ~2.4cm back in x) --
@@ -228,9 +235,9 @@ class EnvConfig(DefaultEnvConfig):
         0.6500,         # x  (closer than previous 0.6259; target x=0.6743)
         -0.0120,        # y  (closer than previous -0.0161; target y=-0.0074)
         0.1500,         # z  (= seated + 0.0145; lowered 2026-06-18 from 0.1600)
-        3.12632,        # roll  (FIX 20260616 gripper-down; was 180deg-flipped gripper-up [0.018,-0.016,0.009,1.0])
-        0.08094,        # pitch
-        0.07049,        # yaw
+        np.pi,         # Native config domain -> command quaternion xyzw [1,0,0,0].
+        0.0,           # Tool Z points vertically down; fixed heading.
+        0.0,
     ])
 
     # -- 动作缩放因子 [xyz, xyz, xyz, rpy, rpy, rpy, gripper]（SERL 官方 7D 参数） --
@@ -242,7 +249,7 @@ class EnvConfig(DefaultEnvConfig):
     RANDOM_RESET = _env_bool("HILSERL_RANDOM_RESET", False)
     DISPLAY_IMAGE = False
     RANDOM_XY_RANGE = float(os.environ.get("HILSERL_RANDOM_XY_RANGE", "0.01"))
-    RANDOM_RZ_RANGE = float(os.environ.get("HILSERL_RANDOM_RZ_RANGE", "0.1"))
+    RANDOM_RZ_RANGE = 0.0  # Reset permits translation changes only.
 
     # -- 安全位姿限位 --
     # CALIBRATED 2026-06-16: position box = insertion-segment span across the 24-demo cluster
@@ -277,6 +284,8 @@ class EnvConfig(DefaultEnvConfig):
     }
 
     # -- 精密模式参数（当前 reset 路径使用，复位后沿用到插入） --
+    # Keep the established positioning stiffness, damping and lateral control.
+    # Limit insertion/extraction spring force to 20 N with the axial error clip.
     PRECISION_PARAM = {
         "translational_stiffness": 2500,
         "translational_damping": 100,
@@ -286,11 +295,11 @@ class EnvConfig(DefaultEnvConfig):
         "translational_clip_x": 0.008,
         "translational_clip_y": 0.008,
         # error_z = z_actual - z_target; positive error drives downward.
-        # Static downward spring term: 2500 N/m * 8 mm = 20 N (was 18 N).
+        # Downward spring-term cap: 2500 N/m * 8 mm = 20 N; not a force setpoint.
         "translational_clip_z": 0.0080,
         "translational_clip_neg_x": 0.008,
         "translational_clip_neg_y": 0.008,
-        # Negative error_z drives upward: 2500 N/m * 8 mm = 20 N (was 18 N).
+        # Upward spring-term cap: 2500 N/m * 8 mm = 20 N; other limits still apply.
         "translational_clip_neg_z": 0.0080,
         "rotational_clip_x": 0.05,
         "rotational_clip_y": 0.05,
@@ -366,6 +375,8 @@ class TrainConfig(DefaultTrainingConfig):
             hz=float(os.environ.get("HILSERL_CONTROL_HZ", "10")),
             recorder=recorder,
             operator=operator,
+            # An external judge owns success in both collection and classifier modes.
+            manual_reward=(mode == "collect" or classifier),
         )
 
         try:
@@ -392,7 +403,7 @@ class TrainConfig(DefaultTrainingConfig):
             env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
 
             # 7) 奖励分类器（插入成功判定）
-            if classifier:
+            if classifier and mode != "collect":
                 classifier_ckpt = os.environ.get("HILSERL_CLASSIFIER_CKPT", "classifier_ckpt/")
                 classifier_fn = _load_classifier_adaptive(
                     checkpoint_path=os.path.abspath(classifier_ckpt),

@@ -5,7 +5,7 @@ import copy
 import cv2
 import numpy as np
 
-from hilserl.profile_names import (FRONT_ROI160, FULL_FRAME, INSERT_ROI, POLICY_SIZES,
+from hilserl.profile_names import (FRONT_ROI160, FRONT_ROI160_V2, FULL_FRAME, INSERT_ROI, POLICY_SIZES,
                                    PROFILE_NAMES)
 
 __all__ = ["FRONT_ROI160", "FRONT_SIDE_CROP", "FULL_FRAME", "INSERT_ROI", "PROFILE_NAMES",
@@ -48,6 +48,10 @@ def get_image_profile(name=FULL_FRAME):
             "side_classifier": dict(crop_xywh=None, size=[128, 128],
                                     interpolation=FRONT_CLASSIFIER_INTERPOLATION),
         })
+    # The 2026-09-21 mount was physically adjusted. Keep the broad verified
+    # crops, but bind new recordings/models to the new physical scene.
+    profiles[FRONT_ROI160_V2] = copy.deepcopy(profiles[FRONT_ROI160])
+    profiles[FRONT_ROI160_V2]["name"] = FRONT_ROI160_V2
     if isinstance(name, dict):
         canonical = get_image_profile(name.get("name"))
         if name != canonical:

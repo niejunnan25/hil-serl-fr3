@@ -177,7 +177,7 @@ def test_every_declared_profile_name_has_geometry(tmp_path):
     assert cfg.validate().image_profile == FRONT_ROI160
     with pytest.raises(ValueError, match="Unknown image_profile"):
         replace(Config(), root=tmp_path, action_contract="fixed-xyz-v1",
-                image_profile="insert-front-roi160-v2").validate()
+                image_profile="insert-front-roi160-v99").validate()
 
 
 def test_cli_config_import_needs_no_camera_or_math_stack():

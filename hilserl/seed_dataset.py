@@ -17,6 +17,7 @@ from typing import Iterable
 import numpy as np
 
 from hilserl.image_profile import FULL_FRAME, get_image_profile, observation_image_schema
+from hilserl.motion_limits import seed_execution_contract
 
 ACTION_CONTRACT = "fixed-xyz-v1"
 OBSERVATION_CONTRACT = "reset-relative-pose_body-velocity_base-wrench_19d-v1"
@@ -142,6 +143,8 @@ def _extract_episode(meta_path, meta, meta_source):
     image_profile = get_image_profile(config.get("image_profile", FULL_FRAME))["name"]
     schema = _schema(image_profile)
     _require(config.get("action_max_step") == 0.008, "source uses a different displacement limit")
+    execution = seed_execution_contract(config.get("action_max_z_step"),
+                                        config.get("position_target_mode", "measured-relative-v1"))
     raw_sources, steps, frame_errors = [], [], {}
     origin = origin_rotation = previous = None
     original_nonterminal_positive = 0
@@ -194,7 +197,7 @@ def _extract_episode(meta_path, meta, meta_source):
                   global_steps=np.asarray([s["global_step"] for s in steps], dtype=np.int64),
                   raw_transition_ids=np.asarray([s["id"] for s in steps]))
     arrays["rewards"][-1] = float(meta["outcome"]); arrays["dones"][-1] = True; arrays["masks"][-1] = 0.
-    entry = {"image_profile": image_profile, "episode_id": meta["id"], "steps": n, "outcome": meta["outcome"], "verdict_source": "human",
+    entry = {"image_profile": image_profile, "execution": execution, "episode_id": meta["id"], "steps": n, "outcome": meta["outcome"], "verdict_source": "human",
              "source_action": "human", "source_episode": meta_source, "source_capture": capture_source,
              "source_config": config_source, "source_steps": raw_sources, "frame_max_errors": frame_errors,
              "nonterminal_classifier_positive_ignored": original_nonterminal_positive,
@@ -243,7 +246,8 @@ def _validate_arrays(arrays, entry, schema=None):
     _require(np.max(np.abs(arrays["obs__state"][0, 0, 4:10])) < 1e-6, "dataset initial pose is not reset-relative")
 
 
-def _manifest(directory, expected_action_contract, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME):
+def _manifest(directory, expected_action_contract, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME,
+              expected_action_max_z_step=None, expected_position_target_mode="measured-relative-v1"):
     path = directory / "manifest.json"
     _require(path.is_file(), "fixed-xyz-v1 requires an audited seed manifest; legacy pickle demos are incompatible")
     _require(not (directory / "build-failure.json").exists(), "dataset build did not finish successfully")
@@ -265,13 +269,15 @@ def _manifest(directory, expected_action_contract, expected_manifest_sha256=None
     _require(manifest.get("action_schema") == {"shape": [3], "dtype": "float32", "frame": "current_end_effector_body", "bounds": [-1, 1]},
              "incompatible seed action schema")
     _require(manifest.get("reward_rule") == REWARD_RULE and manifest.get("selection") == SELECTION, "unsupported seed reward/selection rule")
-    _require(manifest.get("execution") == {"rotation_locked": True, "gripper_locked": True, "action_max_step_m": 0.008},
+    _require(manifest.get("execution") == seed_execution_contract(expected_action_max_z_step, expected_position_target_mode),
              "seed execution contract differs")
     entries = manifest.get("episodes")
     _require(isinstance(entries, list) and len(entries) > 0, "empty seed dataset")
     paths = []
     for entry in entries:
         _require(isinstance(entry, dict), "invalid seed episode manifest")
+        _require(entry.get("execution", seed_execution_contract()) == manifest["execution"],
+                 "seed episode execution contract differs")
         rel = entry.get("file", "")
         _require(isinstance(rel, str) and Path(rel).name == rel and rel.endswith(".npz"), "unsafe seed episode filename")
         _require(entry.get("outcome") == 1 and type(entry.get("outcome")) is int and entry.get("verdict_source") == "human"
@@ -292,10 +298,12 @@ def _episode_arrays(directory, entry, schema=None):
     return arrays
 
 
-def validate_seed_dataset(directory, *, expected_action_contract=ACTION_CONTRACT, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME):
+def validate_seed_dataset(directory, *, expected_action_contract=ACTION_CONTRACT, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME,
+                          expected_action_max_z_step=None, expected_position_target_mode="measured-relative-v1"):
     """Validate all content before training admission; no robot/JAX dependency."""
     directory = Path(directory)
-    manifest = _manifest(directory, expected_action_contract, expected_manifest_sha256, expected_image_profile)
+    manifest = _manifest(directory, expected_action_contract, expected_manifest_sha256, expected_image_profile,
+                         expected_action_max_z_step, expected_position_target_mode)
     seen, steps = set(), 0
     for entry in manifest["episodes"]:
         arrays = _episode_arrays(directory, entry, manifest["observation_schema"])
@@ -308,11 +316,14 @@ def validate_seed_dataset(directory, *, expected_action_contract=ACTION_CONTRACT
     return manifest
 
 
-def iter_seed_transitions(directory, *, expected_action_contract=ACTION_CONTRACT, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME):
+def iter_seed_transitions(directory, *, expected_action_contract=ACTION_CONTRACT, expected_manifest_sha256=None, expected_image_profile=FULL_FRAME,
+                          expected_action_max_z_step=None, expected_position_target_mode="measured-relative-v1"):
     """Yield canonical transitions only after the whole dataset passes validation."""
     directory = Path(directory)
     manifest = validate_seed_dataset(directory, expected_action_contract=expected_action_contract,
-                                     expected_manifest_sha256=expected_manifest_sha256, expected_image_profile=expected_image_profile)
+                                     expected_manifest_sha256=expected_manifest_sha256, expected_image_profile=expected_image_profile,
+                                     expected_action_max_z_step=expected_action_max_z_step,
+                                     expected_position_target_mode=expected_position_target_mode)
     for entry in manifest["episodes"]:
         arrays = _episode_arrays(directory, entry, manifest["observation_schema"])
         for i in range(entry["steps"]):
@@ -365,12 +376,15 @@ def build_seed_dataset(run_dirs: Iterable[Path], output):
         profiles = {e.get("image_profile", FULL_FRAME) for e in entries}
         _require(len(profiles) == 1, "cannot mix image profiles in one seed dataset")
         image_profile = profiles.pop()
+        executions = {json.dumps(e["execution"], sort_keys=True) for e in entries}
+        _require(len(executions) == 1, "cannot mix displacement mappings in one seed dataset")
+        execution = json.loads(executions.pop())
         n = sum(e["steps"] for e in entries)
         manifest = {"schema_version": 1, "status": "complete", "action_contract": ACTION_CONTRACT,
                     "observation_contract": OBSERVATION_CONTRACT, "observation_schema": _schema(image_profile),
                     "image_profile": get_image_profile(image_profile),
                     "action_schema": {"shape": [3], "dtype": "float32", "frame": "current_end_effector_body", "bounds": [-1, 1]},
-                    "execution": {"rotation_locked": True, "gripper_locked": True, "action_max_step_m": 0.008},
+                    "execution": execution,
                     "state_layout": {"gripper": [0, 1], "base_force": [1, 4], "reset_relative_xyz": [4, 7],
                                      "reset_relative_euler_xyz": [7, 10], "base_torque": [10, 13], "body_velocity": [13, 19]},
                     "reward_rule": REWARD_RULE, "selection": SELECTION,
@@ -392,7 +406,9 @@ def build_seed_dataset(run_dirs: Iterable[Path], output):
             os.fsync(fd)
         finally:
             os.close(fd)
-        return validate_seed_dataset(output, expected_image_profile=image_profile)
+        return validate_seed_dataset(output, expected_image_profile=image_profile,
+                                     expected_action_max_z_step=execution.get("action_max_z_step_m"),
+                                     expected_position_target_mode=execution.get("position_target_mode", "measured-relative-v1"))
     except Exception as exc:
         (output / "build-failure.json").write_bytes(_json_bytes({"status": "incomplete", "error": str(exc), "episodes_written": len(entries), "omitted": omitted}))
         raise

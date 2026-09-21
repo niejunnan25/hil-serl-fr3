@@ -65,14 +65,18 @@ class Config:
     control_hz: float = 10.0
     random_reset: bool = True
     random_xy_range: float = 0.006
-    random_rz_range: float = 0.06
+    random_rz_range: float = 0.0
     reset_strict: bool = True
     action_max_step: float = 0.008
+    # None preserves historical isotropic action mapping; new runs opt in explicitly.
+    action_max_z_step: float | None = None
+    position_target_mode: str = "measured-relative-v1"
     action_max_rotation_step: float = 0.045
     safety_force_max: float = 45.0
     safety_dq_max: float = 0.35
     safety_relz_abs_max: float = 0.35
-    reset_clear_z: float = 0.2095
+    reset_clear_z: float = 0.1500
+    reset_feedback: bool = False  # Historical snapshots without this field keep their behavior.
     classifier_threshold: float = 0.78
     depth_threshold: float = 0.08
     classifier_streak: int = 3
@@ -127,7 +131,7 @@ class Config:
             v = getattr(self, key)
             if type(v) is not int or v <= 0:
                 raise ValueError(f"{key} must be a positive integer")
-        for key in ("random_reset", "reset_strict"):
+        for key in ("random_reset", "reset_strict", "reset_feedback"):
             if type(getattr(self, key)) is not bool:
                 raise ValueError(f"{key} must be a JSON boolean")
         for key in ("control_hz", "random_xy_range", "random_rz_range", "action_max_step", "min_free_gib",
@@ -137,6 +141,15 @@ class Config:
                 raise ValueError(f"Invalid {key}")
         if self.control_hz == 0 or self.action_max_step == 0 or self.batch_size % 2:
             raise ValueError("Control frequency/action bound must be positive; batch size must be even")
+        if self.action_max_z_step is not None:
+            if (self.action_contract != "fixed-xyz-v1" or self.action_max_step != .008
+                    or type(self.action_max_z_step) not in (int, float)
+                    or not .008 <= self.action_max_z_step <= .016):
+                raise ValueError("Base Z bound requires fixed-xyz-v1, XY=8 mm and Z in [8, 16] mm")
+        if self.position_target_mode not in {"measured-relative-v1", "command-relative-v1"}:
+            raise ValueError("Unknown position_target_mode")
+        if self.position_target_mode == "command-relative-v1" and self.action_contract != "fixed-xyz-v1":
+            raise ValueError("Command-relative targets require fixed-xyz-v1")
         if not 0 <= self.classifier_threshold <= 1:
             raise ValueError("classifier_threshold must be in [0,1]")
         return self
@@ -152,6 +165,7 @@ class Config:
             AGENTLACE_PORT=self.port, AGENTLACE_BROADCAST_PORT=self.broadcast_port,
             HILSERL_CLASSIFIER_CKPT=self.path(self.classifier_ckpt), HILSERL_SERVER_URL=self.server_url,
             HILSERL_ACTION_CONTRACT=self.action_contract, HILSERL_SEED_DATASET=self.path(self.demo_dir),
+            HILSERL_POSITION_TARGET_MODE=self.position_target_mode,
             HILSERL_IMAGE_PROFILE=self.image_profile,
             HILSERL_CLASSIFIER_IMAGE_KEY=self.classifier_image_key,
             HILSERL_BATCH_SIZE=self.batch_size, HILSERL_CTA_RATIO=self.cta_ratio,
@@ -176,7 +190,8 @@ class Config:
             LEARNER_INITIAL_NETWORK_GRACE_SECONDS=180.0,
             FRANKA_SAFETY_DQ_MAX=self.safety_dq_max, FRANKA_SAFETY_FORCE_MAX=self.safety_force_max,
             FRANKA_CLEARERR_ON_POSE=0, FRANKA_ACTION_MAX_ROT_STEP=self.action_max_rotation_step,
-            HILSERL_RESET_CLEAR_Z=self.reset_clear_z, RESET_JOINT_LIMIT_MARGIN_DEG=12.0, DROP_GRIPPER_MIN=0.4,
+            HILSERL_RESET_CLEAR_Z=self.reset_clear_z, HILSERL_RESET_FEEDBACK=int(self.reset_feedback),
+            RESET_JOINT_LIMIT_MARGIN_DEG=12.0, DROP_GRIPPER_MIN=0.4,
             RESET_MOTION_EFFECTIVE_SPEED=0.002, RESET_MOTION_MAX_TIMEOUT=90.0, RESET_MOTION_SETTLE_TIMEOUT=8.0,
             ACTOR_SUCCESS_CREDIT_HORIZON=0 if self.action_contract == "fixed-xyz-v1" else 24,
             ACTOR_SUCCESS_CREDIT_MIN_ACTION_NORM=0.05, ACTOR_SUCCESS_CREDIT_ONLINE=0,
@@ -188,6 +203,8 @@ class Config:
         )
         if recording_dir:
             values["HILSERL_RECORDING_DIR"] = recording_dir
+        if self.action_max_z_step is not None:
+            values["HILSERL_ACTION_MAX_Z_STEP"] = self.action_max_z_step
         if self.seed_dataset_sha256 is not None:
             values["HILSERL_SEED_DATASET_SHA256"] = self.seed_dataset_sha256
         env.update({k: str(v) for k, v in values.items()})
