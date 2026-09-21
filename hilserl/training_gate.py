@@ -34,12 +34,13 @@ def _process_info(pid):
 
 class TrainingGate:
     def __init__(self, run_dir, data_activity, *, clock=time.monotonic,
-                 process_info=_process_info, freshness_seconds=2.0):
+                 process_info=_process_info, freshness_seconds=2.0, episode_activity=None):
         self.run_dir = Path(run_dir).resolve() if run_dir is not None else None
         self.data_activity = data_activity
         self.clock = clock
         self.process_info = process_info
         self.freshness_seconds = freshness_seconds
+        self.episode_activity = episode_activity
 
     def check(self, *, manual_paused=False):
         result = dict(allowed=False, pause_code=None, pause_reason=None, save_checkpoint=False,
@@ -85,6 +86,21 @@ class TrainingGate:
         collection_started = status.get("collection_started_monotonic_ns")
         if type(collection_started) is not int or not 0 < collection_started <= heartbeat:
             return paused("collection_window_invalid", "Actor 缺少有效的本次采集开始时间；暂停参数更新。")
+        if self.episode_activity is not None:
+            try:
+                activity = self.episode_activity()
+                result.update(reward_generation=activity["generation"],
+                              committed_episodes=activity["committed_episodes"],
+                              online_received_count=activity["online_count"])
+                if activity["error"] or activity["closed"]:
+                    return paused("episode_replay_fault", activity["error"] or "奖励入库服务正在关闭。")
+                if activity["gap"]:
+                    return paused("reward_gap", "等待本条奖励及完整入库确认。", save=False)
+                if activity["released_to"] != attempt or activity["committed_episodes"] < 1:
+                    return paused("waiting_episode_commit", "等待当前 Actor 确认第一条完整 episode 入库。", save=False)
+                return dict(result, allowed=True)
+            except Exception as exc:
+                return paused("episode_activity_unavailable", f"无法核验奖励入库状态：{exc}")
         try:
             activity = self.data_activity("actor_env")
             intervention = self.data_activity("actor_env_intvn")

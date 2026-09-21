@@ -10,7 +10,7 @@ import numpy as np
 from hilserl.image_profile import FULL_FRAME, get_image_profile, observation_image_schema
 
 
-def validate_transition(transition, image_profile=FULL_FRAME):
+def validate_transition(transition, image_profile=FULL_FRAME, *, reward_spec=None):
     """Validate before mutation; success labels must describe real terminals."""
     if not isinstance(transition, dict):
         raise ValueError("Replay transition must be a dict")
@@ -42,8 +42,14 @@ def validate_transition(transition, image_profile=FULL_FRAME):
     if any(v.shape != () or v.dtype.kind not in "bif" or not np.isfinite(v) for v in values.values()):
         raise ValueError("Reward, done and mask must be finite scalars")
     reward, done, mask = (float(values[k]) for k in ("rewards", "dones", "masks"))
-    if done not in (0, 1) or mask != 1 - done or reward not in (0, 1) or reward and not done:
+    if done not in (0, 1) or mask != 1 - done:
         raise ValueError("Replay reward/terminal/mask contract violated")
+    if reward_spec is None:
+        if reward not in (0, 1) or reward and not done or "reward" in info:
+            raise ValueError("Replay reward/terminal/mask contract violated")
+    else:
+        from hilserl.reward_provider import validate_reward
+        validate_reward(transition, reward_spec)
     if done and info.get("verdict_source") != "human":
         raise ValueError("Terminal replay needs a human verdict")
     if info.get("manual_success_credit") or float(transition.get("grasp_penalty", 0)) != 0:
@@ -54,9 +60,10 @@ def validate_transition(transition, image_profile=FULL_FRAME):
 class ContractReplayStore:
     """Preserve the native sampler while validating and counting real inserts."""
 
-    def __init__(self, store, *, image_profile=FULL_FRAME):
+    def __init__(self, store, *, image_profile=FULL_FRAME, reward_spec=None):
         self.store = store
         self.image_profile = get_image_profile(image_profile)["name"]
+        self.reward_spec = reward_spec
         self._ids = set()
         self._admission_lock = Lock()
 
@@ -65,8 +72,12 @@ class ContractReplayStore:
         with self._admission_lock:
             return len(self._ids)
 
+    def existing_ids(self, ids):
+        with self._admission_lock:
+            return self._ids.intersection(ids)
+
     def insert(self, transition):
-        raw_id = validate_transition(transition, self.image_profile)
+        raw_id = validate_transition(transition, self.image_profile, reward_spec=self.reward_spec)
         with self._admission_lock:
             if raw_id in self._ids:
                 raise ValueError(f"Duplicate raw transition: {raw_id}")

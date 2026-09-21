@@ -145,7 +145,7 @@ class CancelledLaunch(Exception):
 _LAUNCH_PENDING_PHASES = {"checking", "waiting_learner", "waiting_actor"}
 _ACTOR_READY_PHASES = {
     "waiting_reset", "waiting_controller", "resetting", "collecting",
-    "awaiting_label", "paused", "operator_prompt",
+    "awaiting_label", "paused", "operator_prompt", "reward_pending", "waiting_reward", "draining_reward",
 }
 
 
@@ -278,6 +278,7 @@ class Manager:
             and actor["env"].get("HILSERL_ACTION_CONTRACT", "legacy-hybrid-7d-v1") == cfg.action_contract
             and actor["env"].get("HILSERL_IMAGE_PROFILE", "full-frame128-v1") == cfg.image_profile
             and actor["env"].get("HILSERL_CLASSIFIER_IMAGE_KEY", "side_classifier") == cfg.classifier_image_key
+            and actor["env"].get("HILSERL_REWARD_SPEC") == learner["env"].get("HILSERL_REWARD_SPEC")
             and cfg.path(actor["env"].get("HILSERL_CLASSIFIER_CKPT", self.config.classifier_ckpt))
                 == cfg.path(cfg.classifier_ckpt)
         )
@@ -497,6 +498,27 @@ class Manager:
                 errors.append(f"示教数据缺失或为空：{cfg.path(cfg.demo_dir)}")
         if not shutil.which("ffmpeg"):
             errors.append("未找到 ffmpeg")
+        reward_spec = cfg.reward_spec()
+        if reward_spec is not None and need_demos:
+            from hilserl.reward_provider import RoboMeterClient
+            provider = RoboMeterClient(reward_spec, cfg.reward_url, timeout=cfg.reward_timeout_seconds)
+            try:
+                provider.health()
+                if need_demos:
+                    from hilserl.reward_seed import iter_reward_seed
+                    from hilserl.seed_dataset import iter_seed_transitions
+                    if not cfg.reward_seed_cache:
+                        raise ValueError("尚未配置示教奖励缓存，请先运行 prepare_reward_seed.py")
+                    source = iter_seed_transitions(cfg.path(cfg.demo_dir),
+                        expected_manifest_sha256=cfg.seed_dataset_sha256, expected_image_profile=cfg.image_profile,
+                        expected_action_max_z_step=cfg.action_max_z_step,
+                        expected_position_target_mode=cfg.position_target_mode)
+                    for _ in iter_reward_seed(source, cfg.path(cfg.reward_seed_cache), cfg.seed_dataset_sha256, reward_spec):
+                        pass
+            except Exception as exc:
+                errors.append(f"奖励模型或示教奖励缓存验证失败：{exc}")
+            finally:
+                provider.close()
         destination = cfg.output_root
         while not destination.exists():
             destination = destination.parent
@@ -839,6 +861,15 @@ class Manager:
             else:
                 learner_policy = {"state": "unknown", "reason": "进程在运行，尚无策略握手结论"}
         receipts = [read_json(self.config.control_root / "gripper.json"), (state or {}).get("gripper")]
+        reward = (state or {}).get("reward")
+        reward_path = (state or {}).get("reward_status_path")
+        if reward_path and Path(reward_path).resolve().is_relative_to(self.config.output_root.resolve()):
+            try:
+                candidate = read_json(Path(reward_path))
+                if candidate and candidate.get("actor_attempt") == state.get("attempt_id"):
+                    reward = candidate
+            except (OSError, ValueError):
+                pass
         gripper = max((item for item in receipts if item), key=lambda item: item.get("unix_ns", 0), default=None)
         retention = dict(keep_count=self.config.checkpoint_keep,
                          rule="latest_recovery_then_comparable_evaluation_then_recency", last_maintenance=None)
@@ -849,6 +880,7 @@ class Manager:
             except (OSError, ValueError):
                 retention["last_maintenance"] = dict(status="error", error="Checkpoint retention status is unreadable")
         return dict(processes=[public_process(p) for p in running],actor=state,launch=launch,
+                    reward=reward,
                     checkpoint_retention=retention,
                     learner_policy=learner_policy,
                     learner_runtime=learner_runtime,

@@ -2,6 +2,16 @@ const $ = id => document.getElementById(id);
 const phases = {starting:'正在初始化',waiting_actor:'等待 Actor 策略握手',stopping_learner:'正在请求 Learner 停止',waiting_reset:'等待复位',waiting_controller:'等待 Xbox RB',resetting:'正在复位',collecting:'正在采集',awaiting_label:'等待人工裁决',paused:'Actor 已暂停',fault:'记录或设备需要处理',degraded:'任务已降级',stopped:'任务已停止',legacy_running:'旧入口正在运行'};
 let status=null, replayId=null, detail=null, timelines={}, players={}, segments={}, syncing=false, gripperBusy=false, controllerPending=null, learnerPending=false;
 const names={wrist_1:'腕部视角',side_policy:'侧面视角'};
+Object.assign(phases,{reward_pending:'正在处理奖励',waiting_reward:'复位完成，等待奖励入库',draining_reward:'正在保存最后一条奖励'});
+function rewardDescription(reward){
+  if(!reward)return '';
+  const labels={idle:'奖励模型就绪',collecting:'正在暂存本条轨迹',waiting_learner:'等待 Learner 完成本次更新',scoring:'正在批量计算奖励',awaiting_label:'计奖完成，等待人工结果',committing:'正在提交完整轨迹',committed:'轨迹已入库，等待复位完成',released:'奖励与入库已完成',pending_recovery:'奖励处理暂停，数据已保留',incomplete:'不完整轨迹已单独保留'};
+  const parts=[labels[reward.phase]||reward.phase];
+  if(Number.isFinite(reward.inference_seconds))parts.push('计奖 '+reward.inference_seconds.toFixed(2)+' 秒');
+  if(Number.isFinite(reward.extra_wait_seconds))parts.push('额外等待 '+reward.extra_wait_seconds.toFixed(2)+' 秒');
+  if(reward.error)parts.push(reward.error);
+  return parts.join(' · ');
+}
 function text(id,value){$(id).textContent=value;}
 function node(tag,content,cls){const n=document.createElement(tag);if(content!==undefined)n.textContent=content;if(cls)n.className=cls;return n;}
 function notice(message,error=false){$('notice').hidden=!message;$('notice').textContent=message;$('notice').classList.toggle('error',error);}
@@ -266,6 +276,7 @@ async function refresh(){
   try{
     status=await get('/api/status');const actor=status.actor,cfg=status.effective_config||status.config;
     renderEpisodeMetrics(status);
+    if($('reward-detail'))text('reward-detail',rewardDescription(status.reward));
     const launchBusy=['checking','waiting_learner','waiting_actor','stopping_learner','starting'].includes(status.launch.phase);
     const controllerBusy=controllerIsBusy(),busy=launchBusy||controllerBusy||learnerPending;
     const launchDegraded=['fault','degraded'].includes(status.launch.phase);

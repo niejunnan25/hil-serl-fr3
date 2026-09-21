@@ -335,7 +335,7 @@ class TrainConfig(DefaultTrainingConfig):
     training_starts   = int(os.environ.get("HILSERL_TRAINING_STARTS", "100"))
     steps_per_update  = int(os.environ.get("HILSERL_STEPS_PER_UPDATE", "50"))
     random_steps      = 0        # 纯随机探索步数
-    discount          = 0.98     # 折扣因子
+    discount          = float(os.environ.get("HILSERL_DISCOUNT", "0.98"))
     buffer_period     = 1000     # 每 N 步 dump buffer 到磁盘
     encoder_type      = "resnet-pretrained"  # 冻结预训练 ResNet-10
     setup_mode        = "single-arm-learned-gripper"
@@ -379,6 +379,7 @@ class TrainConfig(DefaultTrainingConfig):
         )
 
         try:
+            device_env = env
             # hold-grip: 全程钳住插头(中和夹爪动作,避免 demo/env 夹爪符号不一致而开爪丢插头)
             env = FixedAxesDeviceWrapper(env) if contract.fixed_xyz else HoldGripperWrapper(env)
 
@@ -391,15 +392,19 @@ class TrainConfig(DefaultTrainingConfig):
 
             # 3) 相对坐标系变换
             env = RelativeFrame(env)
+            relative_env = env
 
             # 4) 四元数 -> 欧拉角
             env = Quat2EulerWrapper(env)
+            quaternion_env = env
 
             # 5) SERL 标准观测包装
             env = SERLObsWrapper(env, proprio_keys=self.proprio_keys)
+            observation_env = env
 
             # 6) Chunking 包装（obs horizon=1, 无 action chunking）
             env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
+            chunk_env = env
 
             # 7) 奖励分类器（插入成功判定）
             if classifier and mode != "collect":
@@ -464,6 +469,11 @@ class TrainConfig(DefaultTrainingConfig):
             # 9) 旋转锁死（插插头只需 xy+z，policy 不需要 roll/pitch/yaw）
             env = FixedXYZActionWrapper(env) if contract.fixed_xyz else RotationLockWrapper(env)
 
+            # Reset may finish before the asynchronous reward barrier. Read fresh
+            # inputs afterwards without another reset or a dummy control action.
+            from hilserl.observation_refresh import refresh_reset_observation
+            env.refresh_observation = lambda: refresh_reset_observation(
+                device_env, relative_env, (quaternion_env, observation_env), chunk_env)
             return env
         except BaseException:
             env.close()

@@ -83,6 +83,27 @@ class Config:
     video_fps: int = 30
     video_segment_seconds: int = 60
     startup_timeout_seconds: int = 900
+    discount: float = 0.98
+    reward_mode: str = "sparse"
+    reward_url: str = "http://127.0.0.1:20008"
+    reward_model_id: str = ""
+    reward_task: str = "Insert the plug into the socket."
+    reward_image_key: str = "side_policy"
+    reward_scale: float = 1.0
+    reward_max_frames: int = 8
+    reward_batch_size: int = 8
+    reward_timeout_seconds: float = 120.0
+    reward_seed_cache: str = ""
+
+    def reward_spec(self):
+        if self.reward_mode == "sparse":
+            return None
+        from hilserl.reward_provider import MODE, RewardSpec
+        if self.reward_mode != MODE or self.action_contract != "fixed-xyz-v1":
+            raise ValueError("Episode rewards require robometer-episode and fixed-xyz-v1")
+        return RewardSpec(model_id=self.reward_model_id, task=self.reward_task,
+            image_key=self.reward_image_key, image_profile=self.image_profile,
+            gamma=self.discount, scale=self.reward_scale, max_frames=self.reward_max_frames).validate()
 
     def path(self, value):
         path = Path(value).expanduser()
@@ -105,6 +126,17 @@ class Config:
         return hashlib.sha256(json.dumps(self.snapshot(), sort_keys=True).encode()).hexdigest()
 
     def validate(self):
+        if type(self.discount) not in (int, float) or not 0 < self.discount <= 1:
+            raise ValueError("discount must be in (0,1]")
+        if self.reward_spec() is not None:
+            from urllib.parse import urlparse
+            address = urlparse(self.reward_url)
+            if address.scheme not in {"http", "https"} or not address.hostname:
+                raise ValueError("reward_url must be an HTTP service URL")
+            if (type(self.reward_batch_size) is not int or not 1 <= self.reward_batch_size <= 64
+                    or type(self.reward_timeout_seconds) not in (int, float)
+                    or not 0 < self.reward_timeout_seconds < float("inf")):
+                raise ValueError("Invalid reward batch size or timeout")
         if type(self.checkpoint_keep) is not int or self.checkpoint_keep < 0:
             raise ValueError("checkpoint_keep must be a nonnegative integer (0 retains all)")
         if self.action_contract not in {"legacy-hybrid-7d-v1", "fixed-xyz-v1"}:
@@ -206,6 +238,14 @@ class Config:
         if self.seed_dataset_sha256 is not None:
             values["HILSERL_SEED_DATASET_SHA256"] = self.seed_dataset_sha256
         env.update({k: str(v) for k, v in values.items()})
+        env["HILSERL_DISCOUNT"] = str(self.discount)
+        spec = self.reward_spec()
+        if spec is not None:
+            env.update(HILSERL_REWARD_SPEC=json.dumps(asdict(spec), sort_keys=True),
+                       HILSERL_REWARD_URL=self.reward_url,
+                       HILSERL_REWARD_BATCH_SIZE=str(self.reward_batch_size),
+                       HILSERL_REWARD_TIMEOUT=str(self.reward_timeout_seconds),
+                       HILSERL_REWARD_SEED_CACHE=str(self.path(self.reward_seed_cache)) if self.reward_seed_cache else "")
         for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
             env.pop(key, None)
         env["no_proxy"] = env["NO_PROXY"] = "172.16.0.1,localhost,127.0.0.1,::1"

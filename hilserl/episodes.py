@@ -48,7 +48,8 @@ def _training_transition(raw, *, terminal=False, outcome=None, action_contract=L
 def run_episodes(env, sample_action, recorder, operator, *, mode="train", max_episode_steps=190,
                  max_total_steps=100000, max_episodes=None, emit=lambda transition: None,
                  on_episode=lambda summary: None, before_step=lambda obs, step: None,
-                 on_exit=lambda: None, action_contract=LEGACY, image_profile="full-frame128-v1", eval_seed=None):
+                 on_exit=lambda: None, action_contract=LEGACY, image_profile="full-frame128-v1", eval_seed=None,
+                 episode_reward=None, refresh_observation=None):
     """No device step occurs in waiting/reset-label phases.
 
 One replay transition is held until the next decision boundary, so a label arriving
@@ -62,7 +63,22 @@ between ticks can terminate the last real step without sending an additional act
     completed = []
     reason = "stopped"
     recovery_error = None
+
+    def emit_replay(transition):
+        if episode_reward is None:
+            emit(transition)
+
+    def check_recording():
+        recorder.check()
+        if episode_reward is not None:
+            episode_reward.check()
+            operator.publish(reward=episode_reward.snapshot())
+
     try:
+        if episode_reward is not None:
+            if not callable(refresh_observation):
+                raise ValueError("Episode reward mode requires an action-free observation refresh")
+            episode_reward.recover(operator, recorder)
         while global_step < max_total_steps and (max_episodes is None or len(completed) < max_episodes):
             pending = None
             phase = "waiting_reset"
@@ -73,7 +89,7 @@ between ticks can terminate the last real step without sending an additional act
                               ("状态反馈中断，Actor 已暂停；已有步骤保留。"
                                "恢复底层状态并检查机器人后，点击复位开始新的 episode；不会续发旧动作。"
                                if recovery_error else "处理好插头和线缆，确认 E-stop 在手后，按 Enter 或点击复位开始。"),
-                              {"continue"}, check=recorder.check)
+                              {"continue"}, check=check_recording)
                 # Xbox readiness is established without taking dummy environment steps.
                 wrapper = env
                 while wrapper is not None:
@@ -100,8 +116,17 @@ between ticks can terminate the last real step without sending an additional act
                     raise RuntimeError("复位未通过到位验证，禁止开始采集；请查看复位诊断。")
                 operator.raise_if_stop()
                 recorder.event("reset_verified", reset=_plain_info(reset))
+                if episode_reward is not None:
+                    episode_reward.barrier(operator, recorder)
+                    operator.raise_if_stop()
+                    obs = refresh_observation()
+                    check_recording()
+                    operator.raise_if_stop()
+                    recorder.event("observation_refreshed", after_reward_barrier=True)
                 episode_id = recorder.start_episode(mode=mode, reset_info=_plain_info(reset_info),
                                                     action_contract=contract.name, image_profile=image_profile)
+                if episode_reward is not None:
+                    episode_reward.begin(episode_id)
                 recovery_error = None
                 phase = "collecting"
                 episode_start = stamp()
@@ -112,13 +137,15 @@ between ticks can terminate the last real step without sending an additional act
                 deferred_command = None
                 episode_steps, human_steps = 0, 0
                 while True:
-                    recorder.check()
+                    check_recording()
                     command = deferred_command or operator.poll({"label", "pause"})
                     deferred_command = None
                     if command and command["command"] == "pause":
                         if pending is not None:
-                            emit(_training_transition(pending, action_contract=contract))
+                            emit_replay(_training_transition(pending, action_contract=contract))
                         recorder.finish_episode(complete=False, reason="operator_pause")
+                        if episode_reward is not None:
+                            episode_reward.abort("operator_pause")
                         operator.wait("paused", "Actor 已暂停；处理完成后继续，将开始新的 episode。", {"continue"}, check=recorder.check)
                         break
                     terminal_reason = None
@@ -132,10 +159,14 @@ between ticks can terminate the last real step without sending an additional act
                             terminal_reason = "run_step_limit"
                     if terminal_reason:
                         collection_ended = pending["step_ended"] if pending else episode_start
+                        if episode_reward is not None:
+                            operator.publish("awaiting_label" if command is None or command["command"] != "label"
+                                             else "reward_pending")
+                            episode_reward.end_collection()
                         recorder.end_collection(terminal_reason, ended=collection_ended)
                         if command is None or command["command"] != "label":
                             command = operator.wait("awaiting_label", "本条采集已结束，请输入 0=失败 或 1=成功。",
-                                                    {"label"}, check=recorder.check)
+                                                    {"label"}, check=check_recording)
                         outcome = int(command["value"])
                         if recorder.episode:
                             recorder.episode.update(verdict_source="human", verdict_time=stamp(),
@@ -146,7 +177,9 @@ between ticks can terminate the last real step without sending an additional act
                             break
                         if pending is not None:
                             pending["termination_reason"] = terminal_reason
-                            emit(_training_transition(pending, terminal=True, outcome=outcome, action_contract=contract))
+                            emit_replay(_training_transition(pending, terminal=True, outcome=outcome, action_contract=contract))
+                        if episode_reward is not None:
+                            episode_reward.finalize(outcome, terminal_reason)
                         summary = dict(episode_id=episode_id, outcome=outcome, steps=episode_steps,
                                        human_steps=human_steps, mode=mode, termination_reason=terminal_reason,
                                        collection_seconds=(collection_ended["monotonic_ns"] - episode_start["monotonic_ns"]) / 1e9)
@@ -167,7 +200,7 @@ between ticks can terminate the last real step without sending an additional act
                     if deferred_command:
                         continue
                     if pending is not None:
-                        emit(_training_transition(pending, action_contract=contract))
+                        emit_replay(_training_transition(pending, action_contract=contract))
                         pending = None
                     step_started = stamp()
                     base._step_commands = []
@@ -225,6 +258,8 @@ between ticks can terminate the last real step without sending an additional act
                         step_started=step_started, step_ended=step_ended, info=_plain_info(info),
                     )
                     recorder.append_step(pending, recovery=True)
+                    if episode_reward is not None:
+                        episode_reward.append(_training_transition(pending, action_contract=contract), pending)
                     episode_steps += 1
                     global_step += 1
                     obs = next_obs
@@ -249,8 +284,10 @@ between ticks can terminate the last real step without sending an additional act
                     # The retained step has real observations, but no human
                     # verdict. Do not synthesize a terminal reward or success.
                     if pending is not None:
-                        emit(_training_transition(pending, action_contract=contract))
+                        emit_replay(_training_transition(pending, action_contract=contract))
                     recorder.finish_episode(complete=False, reason="robot_state_unavailable")
+                    if episode_reward is not None:
+                        episode_reward.abort("robot_state_unavailable")
                 recorder.check()  # finish_episode(complete=False) may retain a writer fault.
                 operator.raise_if_stop()  # Read queued stop without executing gripper commands.
                 if hasattr(operator, "pending"):
@@ -259,6 +296,8 @@ between ticks can terminate the last real step without sending an additional act
                 pending = None
                 # The outer loop waits for one *new* confirmation before reset.
                 # No recover/home/reset/pose/gripper request is issued here.
+        if episode_reward is not None:
+            episode_reward.barrier(operator, recorder, final=True)
         reason = "completed"
     except (StopRequested, KeyboardInterrupt):
         reason = "operator_stop"
@@ -270,6 +309,12 @@ between ticks can terminate the last real step without sending an additional act
     finally:
         # Stop camera producers before completing encoder queues. Never reset here.
         try:
+            if episode_reward is not None:
+                try:
+                    if reason != "completed":
+                        episode_reward.abort(reason)
+                finally:
+                    episode_reward.close()
             on_exit()
         except Exception as exc:
             reason = str(exc)

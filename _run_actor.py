@@ -48,10 +48,14 @@ _LAST_SAFETY_LOG = 0.0
 
 
 def _make_runtime_trainer_config():
-    return make_trainer_config(
+    result = make_trainer_config(
         port_number=AGENTLACE_PORT,
         broadcast_port=AGENTLACE_BROADCAST_PORT,
     )
+    if os.environ.get("HILSERL_REWARD_SPEC"):
+        from hilserl.episode_commit import REQUEST
+        result.request_types = [*result.request_types, REQUEST]
+    return result
 
 
 def _start_initial_network_retry(publish, *, period, grace_seconds):
@@ -433,6 +437,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
     transitions, demo_transitions, credit_tail = [], [], []
     last_step = -1
     credit_episode = None
+    reward_pipeline = None
 
     def close_client():
         nonlocal client
@@ -575,7 +580,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
             credit_episode = transition["infos"]["episode_id"]
         last_step = transition["infos"]["step"]
         human = transition["infos"]["source_action"] == "human"
-        manual_success = bool(transition["dones"] and transition["rewards"])
+        manual_success = bool(transition["dones"] and transition["infos"]["succeed"])
         data_store.insert(transition)
         transitions.append(copy.deepcopy(transition))
         if human or manual_success:
@@ -600,6 +605,31 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
             flush_buffers()
 
     try:
+        if mode == "train":
+            from pathlib import Path
+            from hilserl.reward_provider import RewardSpec, RoboMeterClient
+            from hilserl.episode_reward import EpisodeRewardPipeline, RewardTransport
+            reward_spec = RewardSpec.from_env()
+            if reward_spec is not None:
+                if reward_spec.gamma != config.discount or config.action_contract != "fixed-xyz-v1":
+                    raise ValueError("Reward gamma/action contract differs from Learner")
+
+                def provider_factory():
+                    return RoboMeterClient(reward_spec, os.environ["HILSERL_REWARD_URL"],
+                        batch_size=int(os.environ["HILSERL_REWARD_BATCH_SIZE"]),
+                        timeout=float(os.environ["HILSERL_REWARD_TIMEOUT"]))
+
+                probe = provider_factory()
+                try:
+                    probe.health()
+                finally:
+                    probe.close()
+                reward_pipeline = EpisodeRewardPipeline(reward_spec,
+                    Path(FLAGS.checkpoint_path) / "reward_pending", recorder.directory / "reward/status.json",
+                    os.environ["HILSERL_RUN_DIR"], operator.state["attempt_id"], provider_factory,
+                    lambda: RewardTransport(FLAGS.ip, AGENTLACE_PORT),
+                    timeout=float(os.environ["HILSERL_REWARD_TIMEOUT"]))
+                operator.publish(reward_status_path=str(reward_pipeline.status_path))
         if mode == "eval":
             # Fix the reset sampler's sequence for comparable frozen evaluations.
             np.random.seed(FLAGS.seed)
@@ -612,7 +642,10 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
                                 max_episodes=FLAGS.eval_n_trajs if mode == "eval" else None,
                                 emit=emit, on_episode=episode_finished,
                                 before_step=lambda obs, step: _check_runtime_safety(obs, step, base.raw_state()["values"]),
-                                on_exit=(lambda: flush_buffers(final=True)) if mode == "train" else lambda: None)
+                                on_exit=(lambda: flush_buffers(final=True)) if mode == "train" else lambda: None,
+                                episode_reward=reward_pipeline,
+                                refresh_observation=(env.get_wrapper_attr("refresh_observation")
+                                                     if reward_pipeline is not None else None))
         if mode == "eval":
             import json
             from hilserl.checkpoint_scores import record_evaluation
@@ -631,11 +664,13 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
             print(f"[checkpoint-evaluation] {json.dumps(report, ensure_ascii=False)}", flush=True)
         return results
     finally:
+        if reward_pipeline is not None:
+            reward_pipeline.close()
         close_client()
 
 
 def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=None,
-            *, start_step=0, training_gate=None):
+            *, start_step=0, training_gate=None, episode_server=None):
     """
     The learner loop, which runs when "--learner" is set to True.
     """
@@ -648,9 +683,25 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
     completed_groups = 0
     metrics = None
     last_update_info = None
+    from hilserl.reward_provider import RewardSpec
+    reward_spec = RewardSpec.from_env()
+    if reward_spec is not None and episode_server is None:
+        from pathlib import Path
+        from hilserl.episode_commit import EpisodeCommitServer
+        if config.discount != reward_spec.gamma:
+            raise ValueError("Learner discount differs from reward contract")
+        jax.block_until_ready(agent)
+        episode_server = EpisodeCommitServer(Path(FLAGS.checkpoint_path) / "episode_replay",
+            str(control.run_dir.resolve()), control.state["attempt_id"], reward_spec,
+            replay_buffer, demo_buffer, max_steps=int(os.environ.get("HILSERL_MAX_EPISODE_STEPS", "190")))
+        initial_online_count = replay_buffer.transition_count
 
     def stats_callback(type: str, payload: dict) -> dict:
         """Callback for when server receives stats request."""
+        if episode_server is not None:
+            from hilserl.episode_commit import REQUEST
+            if type == REQUEST:
+                return episode_server.handle(payload)
         assert type == "send-stats", f"Invalid request type: {type}"
         if wandb_logger is not None:
             wandb_logger.log(payload, step=step)
@@ -666,10 +717,16 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
         _make_runtime_trainer_config(),
         request_callback=stats_callback,
     )
-    server.register_data_store("actor_env", replay_buffer)
-    server.register_data_store("actor_env_intvn", demo_buffer)
+    if episode_server is not None:
+        from hilserl.episode_commit import EpisodeOnlyStore
+        server.register_data_store("actor_env", EpisodeOnlyStore())
+        server.register_data_store("actor_env_intvn", EpisodeOnlyStore())
+    else:
+        server.register_data_store("actor_env", replay_buffer)
+        server.register_data_store("actor_env_intvn", demo_buffer)
     server.start(threaded=True)
-    training_gate = training_gate or TrainingGate(control.run_dir, server.get_data_activity)
+    training_gate = training_gate or TrainingGate(control.run_dir, server.get_data_activity,
+        episode_activity=episode_server.snapshot if episode_server is not None else None)
 
     last_step = start_step - 1
     runtime_error = None
@@ -754,7 +811,7 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
         last_heartbeat = 0.0
         pause_checkpoint_step = None
 
-        def wait_for_collection():
+        def wait_for_collection(*, reserve=False):
             nonlocal paused, last_heartbeat, pause_checkpoint_step
             while not control.stop_requested():
                 decision = training_gate.check(manual_paused=control.activity_paused())
@@ -767,6 +824,8 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
                     decision["online_transition_count"] = online_count
                 fields = {key: value for key, value in decision.items() if key not in {"allowed", "save_checkpoint"}}
                 if decision["allowed"]:
+                    if reserve and episode_server is not None and not episode_server.begin_update():
+                        continue
                     if paused or control.state["phase"] != "training":
                         control.publish("training", step=last_step, next_step=last_step + 1, **fields)
                         last_heartbeat = time.monotonic()
@@ -808,14 +867,21 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
         publish_initial_network("training-start")
 
         # 50/50 sampling from RLPD, half from demo and half from online experience
-        replay_iterator = replay_buffer.get_iterator(
+        def episode_batches(store):
+            # No background prefetch across a reward gap. Transfers and sampling
+            # belong to the reserved update group and its GPU completion fence.
+            while True:
+                yield jax.device_put(store.sample(batch_size=config.batch_size // 2,
+                    pack_obs_and_next_obs=True), device=sharding.replicate())
+
+        replay_iterator = episode_batches(replay_buffer) if episode_server is not None else replay_buffer.get_iterator(
             sample_args={
                 "batch_size": config.batch_size // 2,
                 "pack_obs_and_next_obs": True,
             },
             device=sharding.replicate(),
         )
-        demo_iterator = demo_buffer.get_iterator(
+        demo_iterator = episode_batches(demo_buffer) if episode_server is not None else demo_buffer.get_iterator(
             sample_args={
                 "batch_size": config.batch_size // 2,
                 "pack_obs_and_next_obs": True,
@@ -838,7 +904,7 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
         for step in tqdm.tqdm(
             range(start_step, config.max_steps), dynamic_ncols=True, desc="learner"
         ):
-            if not wait_for_collection():
+            if not wait_for_collection(reserve=True):
                 break
             # run n-1 critic updates and 1 critic + actor update.
             # This makes training on GPU faster by reducing the large batch transfer time from CPU to GPU
@@ -902,6 +968,9 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
             ):
                 _save_training_checkpoint(FLAGS.checkpoint_path, agent.state, step)
 
+            if episode_server is not None:
+                episode_server.complete_update(lambda: jax.block_until_ready((agent, update_info)), step)
+
 
     except KeyboardInterrupt:
         print("\n[ctrl-c-save] learner Ctrl-C received; saving final checkpoint...", flush=True)
@@ -910,6 +979,8 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None, control=N
         control.publish("fault", error=runtime_error)
         raise
     finally:
+        if episode_server is not None:
+            episode_server.close(runtime_error)
         # Persist the final state before closing transport resources. A socket
         # cleanup failure must never prevent a model save.
         saved = control.state.get("checkpoint_path") if control.state.get("checkpoint_saved") else None
@@ -1032,6 +1103,8 @@ def main(_):
 
 
 def _main(_, resources):
+    from hilserl.reward_provider import RewardSpec
+    reward_spec = RewardSpec.from_env()
     global config
     config = CONFIG_MAPPING[FLAGS.exp_name]()
     learner_control = resources.get("learner_control")
@@ -1162,7 +1235,7 @@ def _main(_, resources):
         )
         if config.action_contract == "fixed-xyz-v1":
             from hilserl.learning_replay import ContractReplayStore
-            replay_buffer = ContractReplayStore(replay_buffer, image_profile=config.image_profile)
+            replay_buffer = ContractReplayStore(replay_buffer, image_profile=config.image_profile, reward_spec=reward_spec)
         # set up wandb and logging
         wandb_logger = make_wandb_logger(
             project="hil-serl",
@@ -1184,16 +1257,21 @@ def _main(_, resources):
         if config.action_contract == "fixed-xyz-v1":
             from hilserl.learning_replay import ContractReplayStore
             from hilserl.seed_dataset import iter_seed_transitions
-            demo_buffer = ContractReplayStore(demo_buffer, image_profile=config.image_profile)
+            demo_buffer = ContractReplayStore(demo_buffer, image_profile=config.image_profile, reward_spec=reward_spec)
             seed_digest = os.environ.get("HILSERL_SEED_DATASET_SHA256")
             if not seed_digest:
                 raise ValueError("fixed-xyz-v1 requires a pinned seed dataset SHA-256")
-            for transition in iter_seed_transitions(os.environ["HILSERL_SEED_DATASET"],
+            seed_transitions = iter_seed_transitions(os.environ["HILSERL_SEED_DATASET"],
                     expected_action_contract=config.action_contract, expected_manifest_sha256=seed_digest,
                     expected_image_profile=config.image_profile,
                     expected_action_max_z_step=(float(os.environ["HILSERL_ACTION_MAX_Z_STEP"])
                                                if "HILSERL_ACTION_MAX_Z_STEP" in os.environ else None),
-                    expected_position_target_mode=os.environ.get("HILSERL_POSITION_TARGET_MODE", "measured-relative-v1")):
+                    expected_position_target_mode=os.environ.get("HILSERL_POSITION_TARGET_MODE", "measured-relative-v1"))
+            if reward_spec is not None:
+                from hilserl.reward_seed import iter_reward_seed
+                seed_transitions = iter_reward_seed(seed_transitions, os.environ["HILSERL_REWARD_SEED_CACHE"],
+                                                    seed_digest, reward_spec)
+            for transition in seed_transitions:
                 check_learner_stop()
                 demo_buffer.insert(transition)
         else:
@@ -1217,7 +1295,7 @@ def _main(_, resources):
                         replay_buffer.insert(transition)
         print_green(f"demo buffer size: {len(demo_buffer)}")
         print_green(f"online buffer size ({config.action_contract}): {len(replay_buffer)}")
-        if FLAGS.resume_checkpoint_step >= 0:
+        if FLAGS.resume_checkpoint_step >= 0 and reward_spec is None:
             restored_buffers = _reload_online_buffers(FLAGS.checkpoint_path, replay_buffer, demo_buffer,
                                                       check_stop=check_learner_stop)
             print_green(f"restored persisted online chunks: {restored_buffers}")

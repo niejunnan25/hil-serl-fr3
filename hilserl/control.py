@@ -143,7 +143,8 @@ def send_command(directory, command, value=None, expected=None):
         "continue": {"waiting_reset", "paused", "operator_prompt"},
         "pause": {"collecting"},
         "gripper": GRIPPER_PHASES,
-        "stop": {"starting", "waiting_reset", "waiting_controller", "resetting", "collecting", "awaiting_label", "paused", "operator_prompt"},
+        "stop": {"starting", "waiting_reset", "waiting_controller", "resetting", "collecting", "awaiting_label", "paused", "operator_prompt",
+                 "reward_pending", "waiting_reward", "draining_reward"},
     }
     if command not in allowed or state["phase"] not in allowed[command]:
         raise ValueError(f"{command} is unavailable during {state['phase']}")
