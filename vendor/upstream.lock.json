@@ -7,7 +7,7 @@
       "commit": "c32939bccb65f3b8c43a9f9add3d322d4ab0264a",
       "path": "upstream/hil-serl",
       "patch": "vendor/patches/hil-serl.patch",
-      "sha256": "dad0dcd2f2c533a7455254147d4c3a52b23aae15883e1992d88a6524df177451"
+      "sha256": "a6a49199a45e3b0b448e0c2e42a2e0fe8c6f6896f9ffb2b94bbb3b087e256e6b"
     },
     {
       "name": "serl",

@@ -486,7 +486,9 @@ class Manager:
                         raise ValueError("fixed-xyz-v1 缺少已核验的示范集 SHA-256")
                     seed_manifest = validate_seed_dataset(cfg.path(cfg.demo_dir), expected_action_contract=cfg.action_contract,
                                                           expected_manifest_sha256=cfg.seed_dataset_sha256,
-                                                          expected_image_profile=cfg.image_profile)
+                                                          expected_image_profile=cfg.image_profile,
+                                                          expected_action_max_z_step=cfg.action_max_z_step,
+                                                          expected_position_target_mode=cfg.position_target_mode)
                     demo_count = seed_manifest["counts"]["episodes"]
                     demo_transition_count = seed_manifest["counts"]["transitions"]
                 except (OSError, ValueError, RuntimeError) as exc:

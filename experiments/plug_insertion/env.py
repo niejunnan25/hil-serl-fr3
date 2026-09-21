@@ -60,7 +60,7 @@ def is_plug_held(gripper_pos, threshold=DROP_GRIPPER_MIN):
 
 
 def sample_reset_pose(config, rng=np.random):
-    """Sample a 6D reset pose from the configured SERL fixed reset region."""
+    """Sample reset translation only; orientation is fixed by RESET_POSE."""
     reset_pose = copy.deepcopy(np.asarray(config.RESET_POSE, dtype=float)).reshape(6)
     if getattr(config, "RANDOM_RESET", False):
         reset_pose[:2] += rng.uniform(
@@ -68,10 +68,6 @@ def sample_reset_pose(config, rng=np.random):
             float(config.RANDOM_XY_RANGE),
             size=(2,),
         )
-        reset_pose[5] += float(rng.uniform(
-            -float(config.RANDOM_RZ_RANGE),
-            float(config.RANDOM_RZ_RANGE),
-        ))
     return reset_pose
 
 
@@ -95,11 +91,13 @@ class PlugInsertionEnv(FrankaEnv):
     3. 判定:  奖励由分类器 + 位姿联合给出
     """
 
-    def __init__(self, recorder=None, operator=None, **kwargs):
+    def __init__(self, recorder=None, operator=None, manual_reward=False, **kwargs):
+        self.manual_reward = manual_reward
         self.recorder = recorder
         self.operator = operator
         self._state_capture = None
         self._step_commands = []
+        self._command_pose = None
         self.frame_references = {}
         self.last_reset_info = None
         try:
@@ -271,6 +269,7 @@ class PlugInsertionEnv(FrankaEnv):
             item.update(error=exc.as_dict(), delivery_unknown=exc.delivery_unknown, response=stamp())
             raise
         item.update(returned=True, response=stamp())
+        self._command_pose = item["pose"].astype(np.float64).copy()
 
     def _send_gripper_command(self, pos, mode="binary"):
         """Preserve the binary/cooldown contract while recording one HTTP attempt."""
@@ -294,6 +293,33 @@ class PlugInsertionEnv(FrankaEnv):
         item.update(returned=True, response=stamp())
         self.last_gripper_act = time.time()
         time.sleep(self.gripper_sleep)
+
+    def compute_reward(self, obs):
+        # Human collection must not stop on an old pose heuristic or classifier.
+        if getattr(self, "manual_reward", False):
+            return 0
+        return super().compute_reward(obs)
+
+    def _action_target_position(self, xyz_delta):
+        if getattr(self.config, "POSITION_TARGET_MODE", "measured-relative-v1") != "command-relative-v1":
+            return super()._action_target_position(xyz_delta)
+        if self._command_pose is None:
+            raise RuntimeError("Command-relative motion requires a confirmed reset target")
+        from hilserl.motion_limits import advance_position_target
+        return advance_position_target(self._command_pose[:3], xyz_delta, self.currpos[:3],
+                                       self.action_max_step, getattr(self.config, "ACTION_MAX_Z_STEP", None))
+
+    def _action_target_orientation(self, rot_delta):
+        if self.lock_rotation:
+            return self.resetpos[3:].copy()
+        return super()._action_target_orientation(rot_delta)
+
+    def _clip_translation_delta(self, delta):
+        z_limit = getattr(self.config, "ACTION_MAX_Z_STEP", None)
+        if z_limit is None:
+            return super()._clip_translation_delta(delta)
+        from hilserl.motion_limits import clip_translation_delta
+        return clip_translation_delta(delta, self.action_max_step, z_limit)
 
     def step(self, action):
         self._step_commands = []
@@ -514,6 +540,9 @@ class PlugInsertionEnv(FrankaEnv):
         goal = goal.reshape(7)
         self._last_reset_goal = goal.copy()
         max_step = 0.015
+        max_z_step = getattr(self.config, "ACTION_MAX_Z_STEP", None)
+        if max_z_step is not None:
+            max_step = min(max_step, getattr(self, "action_max_step", .008))
         max_rot_step = 0.05
         pos_tol, rot_tol = 0.004, 0.04
         self._reset_progress(name, force=True, target_pose=goal.tolist())
@@ -551,7 +580,19 @@ class PlugInsertionEnv(FrankaEnv):
                 dxyz = goal[:3] - curr[:3]
                 drot = (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
                 distance, angle = float(np.linalg.norm(dxyz)), float(np.linalg.norm(drot))
-                if distance > max_step:
+                if name == "clear":
+                    # Keep the withdrawal XY reference fixed instead of letting
+                    # radial scaling make it follow lateral tracking drift.
+                    lateral_ratio = float(np.linalg.norm(dxyz[:2])) / max_step
+                    if lateral_ratio >= 1:
+                        self._reset_failure(name, "lateral_deviation",
+                                            lateral_error_m=float(np.linalg.norm(dxyz[:2])))
+                    z_budget = (max_z_step or max_step) * np.sqrt(1 - lateral_ratio**2)
+                    dxyz[2] = np.clip(dxyz[2], -z_budget, z_budget)
+                elif max_z_step is not None:
+                    from hilserl.motion_limits import clip_translation_delta
+                    dxyz = clip_translation_delta(goal[:3] - curr[:3], max_step, max_z_step)
+                elif distance > max_step:
                     dxyz *= max_step / distance
                 if angle > max_rot_step:
                     drot *= max_rot_step / angle
@@ -616,8 +657,7 @@ class PlugInsertionEnv(FrankaEnv):
             # Retain the existing short exact-goal hold only when already nearby.
             hold_deadline = time.monotonic() + (0.5 if exact_goal_allowed else 0.0)
             while time.monotonic() < hold_deadline:
-                self._send_pos_command(goal if pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
-                                       else bounded_target(curr))
+                self._send_pos_command(bounded_target(curr))
                 time.sleep(min(1.0 / self.hz, max(0.0, hold_deadline - time.monotonic())))
                 curr, pos_err, rot_err = measured()
                 check_progress(curr, pos_err, rot_err)
@@ -634,8 +674,7 @@ class PlugInsertionEnv(FrankaEnv):
                 if time.monotonic() >= settle_deadline:
                     self._reset_failure(name, "not_converged", position_error_m=pos_err,
                                         rotation_error_rad=rot_err, timeout_seconds=adaptive_timeout)
-                self._send_pos_command(goal if pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
-                                       else bounded_target(curr))
+                self._send_pos_command(bounded_target(curr))
                 time.sleep(min(0.2, max(0.0, settle_deadline - time.monotonic())))
         except BaseException as exc:
             if self.last_reset_info.get("state") not in ("failed", "cancelled"):
