@@ -86,6 +86,37 @@ class UpstreamManagementTest(unittest.TestCase):
         self.assertEqual(self.git(dep, "diff", "--cached"), "")
         self.manage("check", self.root)
 
+    def test_linked_worktree_roundtrip_preserves_main_checkout_and_indexes(self):
+        self.git(self.root, "add", "vendor")
+        self.git(self.root, "commit", "-qm", "pin dependencies")
+        target = self.base / "linked"
+        self.git(self.root, "worktree", "add", "--detach", str(target), "HEAD")
+        self.assertTrue((target / ".git").is_file())
+        protected = [self.root / ".git/index", self.root / "vendor/upstream.lock.json",
+                     self.root / "vendor/patches/dep.patch",
+                     self.root / "upstream/dep/.git/index",
+                     self.root / "upstream/dep/module.py"]
+        before = {path: path.read_bytes() for path in protected}
+        self.manage("restore", target)
+        self.manage("check", target)
+        dep = target / "upstream/dep"
+        self.assertFalse((dep / "obsolete.py").exists())
+        self.assertEqual((dep / "__init__.py").read_bytes(), b"")
+        self.assertEqual((dep / "module.py").read_text(), "VALUE = 2\n")
+        (dep / "module.py").write_text("VALUE = 3\n")
+        self.git(dep, "add", "-u")
+        staged = (dep / ".git/index").read_bytes()
+        self.manage("export", target)
+        self.manage("restore", target)
+        self.manage("check", target)
+        self.assertEqual((dep / ".git/index").read_bytes(), staged)
+        self.assertEqual({path: path.read_bytes() for path in protected}, before)
+        fresh = self.base / "linked-export-restored"
+        self.init(fresh)
+        shutil.copytree(target / "vendor", fresh / "vendor")
+        self.manage("restore", fresh)
+        self.assertEqual((fresh / "upstream/dep/module.py").read_text(), "VALUE = 3\n")
+
     def test_staged_deletion_is_exported_without_altering_real_index(self):
         dep = self.root / "upstream/dep"
         before = (self.root / "vendor/patches/dep.patch").read_bytes()

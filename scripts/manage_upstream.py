@@ -27,6 +27,16 @@ def run(args, *, cwd, env=None, capture=True):
 def git(repo, *args, env=None):
     return run(["git", *args], cwd=repo, env=env)
 
+def git_directory(root):
+    """Resolve the per-worktree administrative directory, including .git files."""
+    root = Path(root).resolve()
+    if not (root / ".git").exists():
+        raise ValueError("Expected a Git checkout or linked worktree root")
+    top = Path(git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    if top != root:
+        raise ValueError("Expected the Git worktree root")
+    return Path(git(root, "rev-parse", "--absolute-git-dir").decode().strip())
+
 def inside(root, relative):
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
@@ -60,7 +70,7 @@ def source_patch(root, repo, commit):
                    and (p in baseline or (repo / p).exists() or (repo / p).is_symlink()))
     # A separate index captures additions/deletions, including empty files,
     # without changing the index or working files of the live dependency.
-    with tempfile.TemporaryDirectory(prefix="upstream-index-", dir=root / ".git") as tmp:
+    with tempfile.TemporaryDirectory(prefix="upstream-index-", dir=git_directory(root)) as tmp:
         env = os.environ.copy()
         env["GIT_INDEX_FILE"] = str(Path(tmp) / "index")
         git(repo, "read-tree", commit, env=env)
@@ -99,8 +109,7 @@ def main():
                         help="Repository to operate on (defaults to this script's repository)")
     args = parser.parse_args()
     root = args.root.resolve()
-    if not (root / ".git").is_dir():
-        raise ValueError("Run against a normal Git clone with a .git directory")
+    git_directory(root)
     lock_path, lock = read_lock(root)
     # Validate every existing patch before starting any restoration.
     expected = {}

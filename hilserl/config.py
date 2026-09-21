@@ -214,7 +214,10 @@ class Config:
         packages = list(self.path(self.python).parents[1].glob("lib/python*/site-packages"))
         if packages:
             env["CUDA_ROOT"] = str(packages[0] / "nvidia/cuda_nvcc")
-        python_paths = [self.root, self.root / "upstream/hil-serl/serl_robot_infra",
+        # Prefer this checkout's Agentlace over an editable install in a shared
+        # environment, which may still point at the active main worktree.
+        python_paths = [self.root, self.root / "upstream/agentlace",
+                        self.root / "upstream/hil-serl/serl_robot_infra",
                         self.root / "upstream/hil-serl/serl_launcher", self.root / "upstream/hil-serl/examples"]
         env["PYTHONPATH"] = os.pathsep.join(map(str, python_paths)) + os.pathsep + env.get("PYTHONPATH", "")
         return env
