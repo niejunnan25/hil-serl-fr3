@@ -1,0 +1,44 @@
+diff --git a/config/serl_franka_controllers.yaml b/config/serl_franka_controllers.yaml
+index b4fcc61cb2b069e4aa2ba4223cbff29b7e5d7545..b25796d8b9983c02aa69e32d186701ec67ea7e75 100644
+--- a/config/serl_franka_controllers.yaml
++++ b/config/serl_franka_controllers.yaml
+@@ -1,22 +1,22 @@
+ joint_position_controller:
+     type: serl_franka_controllers/JointPositionController
+     joint_names:
+-        - panda_joint1
+-        - panda_joint2
+-        - panda_joint3
+-        - panda_joint4
+-        - panda_joint5
+-        - panda_joint6
+-        - panda_joint7
++        - fr3_joint1
++        - fr3_joint2
++        - fr3_joint3
++        - fr3_joint4
++        - fr3_joint5
++        - fr3_joint6
++        - fr3_joint7
+ 
+ cartesian_impedance_controller:
+     type: serl_franka_controllers/CartesianImpedanceController
+-    arm_id: panda
++    arm_id: fr3
+     joint_names:
+-        - panda_joint1
+-        - panda_joint2
+-        - panda_joint3
+-        - panda_joint4
+-        - panda_joint5
+-        - panda_joint6
+-        - panda_joint7
+\ No newline at end of file
++        - fr3_joint1
++        - fr3_joint2
++        - fr3_joint3
++        - fr3_joint4
++        - fr3_joint5
++        - fr3_joint6
++        - fr3_joint7
+\ No newline at end of file

@@ -1,8 +1,8 @@
-"""sim/data/contract.py — sim 内部 hardcode 常量（与 v2.0 real-side 字节级兼容的契约）。
+"""sim/data/contract.py — sim 内部 hardcode 常量（与 live real-side 兼容的契约）。
 
 Single source of truth for:
   - ACTION_SCALE    : 7D action 各维的归一化分母
-  - STATE_KEYS_ORDERED : 25D state 的 ordered 拼接键
+  - STATE_KEYS_ORDERED : 19D live SERL flat state 的 ordered 拼接键
   - STATE_DIMS / STATE_DTYPE
   - IMAGE_SHAPE / IMAGE_DTYPE
   - POLICY_IMAGE_KEYS / CLASSIFIER_IMAGE_KEYS / CLASSIFIER_ALIAS_OF
@@ -17,7 +17,7 @@ CONTRACT_VERSION 在 schema 变更时必须 bump。
 """
 from __future__ import annotations
 
-CONTRACT_VERSION = "v2.1-real-2026-06-11"
+CONTRACT_VERSION = "v2.1-live-serl19-2026-06-19"
 
 # 7D action 归一化分母（与 real-side ACTION_SCALE 一致；sim 端 hardcode，不 import）
 # 顺序: (dx, dy, dz, droll, dpitch, dyaw, gripper)
@@ -36,29 +36,27 @@ ACTION_SCALE = (0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0)
 # 故此处只统一 sim 端 replay home，不覆盖 loader 的 spawn 位姿。
 FR3_HOME_JOINTS = (0.0, -0.569, 0.0, -2.810, 0.0, 3.037, 0.741)
 
-# 25D state — ordered concatenation keys.
-# Source of truth: experiments/plug_insertion/config.py:237
-#   proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
-# Wrapper 注释 (experiments/plug_insertion/wrapper.py:23-25):
-#   state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)] = 25D
-# 注: spec 第 88-91 行原始算式 7+6+3+3+1=20，但 wrapper.py 注释明示 =25D。
-# A2 hard-freeze 解决: tcp_pose=7 (pos+quat xyzw); tcp_vel=6; tcp_force=3; tcp_torque=3; gripper=1 ⇒ 7+6+3+3+1=20 ≠25.
-# 真实 mainline 实测 state.shape[-1] 待用户合并时 grep env.sample()["state"] 确认。
-# 临时记录两个数: 25 (wrapper.py 注释) vs 20 (算术); 我们 hardcode 25D 与 wrapper.py 注释一致。
-STATE_KEYS_ORDERED = ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
-STATE_DIMS = 25                # PENDING VERIFY.md hard-freeze (A2 Task 3)
+# 19D live SERL flat state — gymnasium.spaces.Dict flatten order.
+# Source of truth: experiments/plug_insertion/config.py / state_layout.py
+#   proprio_keys insertion order:
+#     ("tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose")
+#   gymnasium Dict flatten order:
+#     ("gripper_pose", "tcp_force", "tcp_pose", "tcp_torque", "tcp_vel")
+#   dims:
+#     gripper_pose(1) + tcp_force(3) + tcp_pose(6 pos+euler)
+#     + tcp_torque(3) + tcp_vel(6) = 19.
+STATE_KEYS_ORDERED = ("gripper_pose", "tcp_force", "tcp_pose", "tcp_torque", "tcp_vel")
+STATE_DIMS = 19
 STATE_DTYPE = "float32"
 
-# A10 codex #2 fix (HIGH): per-key dim table.
-# 7+6+3+3+1=20 vs STATE_DIMS=25 (wrapper.py 注释) 的算术矛盾通过:
-#   gripper_pose 在 sim 端 tiled 6 次以匹配 wrapper.py 25D 分布
-#   (参 gello_replay.py:298 `np.full(6, gripper_scalar, dtype=np.float64)`)
-# 这里 STATE_KEY_DIMS 取 6 (非 1) 反映 sim 实际拼接行为, 同时让
-#   sum(STATE_KEY_DIMS) == STATE_DIMS, codex #2 的"true order verification"
-#   可基于 STATE_KEY_DIMS 做累计切片边界检查.
-STATE_KEY_DIMS = (7, 6, 3, 3, 6)   # tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper_pose(6) = 25
-# 实接注释: real-side 可能不同 (1D gripper scalar). sim 端 hardcode 6D tiled,
-#   real-side 兼容性由 A4 wrapper.py normalize 阶段处理.
+STATE_KEY_DIMS = (1, 3, 6, 3, 6)
+
+# Flat slice boundaries for producers/validators that need explicit indexing.
+STATE_GRIPPER_SLICE = slice(0, 1)
+STATE_TCP_FORCE_SLICE = slice(1, 4)
+STATE_TCP_POSE_SLICE = slice(4, 10)
+STATE_TCP_TORQUE_SLICE = slice(10, 13)
+STATE_TCP_VEL_SLICE = slice(13, 19)
 
 # Image spec (CHW)
 IMAGE_SHAPE = (3, 128, 128)

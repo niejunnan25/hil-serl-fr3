@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="HIL-SERL 插插头训练、评估、示教与回放控制台">
+  <title>HIL-SERL · 工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23262d32'/%3E%3Cpath d='M8 9v14m16-14v14M8 16h16' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a class="brand" href="/">HIL-SERL <span>FR3 · 插插头</span></a><span id="connection" class="connection">正在读取状态</span></header>
+  <nav aria-label="主导航"><button class="tab active" data-view="workspace">工作台</button><button class="tab" data-view="replay">回放与数据</button><button class="tab" data-view="settings">运行设置</button></nav>
+  <main>
+    <section id="workspace" class="view active">
+      <div class="title-row"><div><p class="eyebrow">当前任务</p><h1 id="phase-title">准备开始</h1><p id="phase-detail" class="muted">选择训练、独立评估或人工示教。</p></div><div class="mode-start"><label for="mode">运行模式</label><select id="mode"><option value="train">在线训练</option><option value="eval">独立评估</option><option value="collect">人工示教</option></select><button id="start" class="primary" disabled>开始任务</button></div></div>
+      <div id="eval-options" class="eval-options" hidden><label for="checkpoint">评估 checkpoint<input id="checkpoint" placeholder="/…/checkpoint_2000" autocomplete="off"></label><label for="eval-episodes">评估条数<input id="eval-episodes" type="number" min="1" max="1000" value="10"></label></div>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <div class="operation-bar"><div><span class="small-label">本条 episode</span><div class="step-count"><strong id="step-count">—</strong><span id="step-limit">/ 190 步</span></div></div><div class="verdict-actions"><button id="label-fail" class="verdict" disabled><kbd>0</kbd> 失败结束</button><button id="label-success" class="verdict success" disabled><kbd>1</kbd> 成功结束</button><button id="continue" class="primary" hidden>复位并开始</button></div><button id="pause" class="quiet" disabled>暂停 Actor</button><button id="stop" class="quiet" disabled>停止 Actor</button></div>
+      <section class="episode-metrics" aria-label="接管率与成功率">
+        <div><span class="small-label">本条接管率</span><strong id="current-intervention-rate">—</strong><span id="current-intervention-detail" class="muted">等待采集</span></div>
+        <div><span class="small-label">近 10 条接管率</span><strong id="recent-intervention-rate">—</strong><span id="recent-intervention-detail" class="muted">正在读取本轮记录</span></div>
+        <div><span class="small-label">近 10 条成功率</span><strong id="recent-success-rate">—</strong><span id="recent-success-detail" class="muted">正在读取本轮记录</span></div>
+        <p id="episode-metrics-scope">本轮最近 10 条已完成且人工标注的 episode；接管率按有效步数汇总。</p>
+      </section>
+      <div class="process-controls" role="group" aria-label="Learner 与 Actor 进程控制"><span class="small-label">进程与训练</span><button id="start-learner" class="quiet" aria-describedby="learner-resume-detail" disabled>启动 Learner</button><button id="resume-learner" class="quiet" aria-describedby="learner-resume-detail" disabled>续训 Learner</button><button id="learner-activity" class="quiet" disabled>手动暂停 Learner</button><button id="start-actor" class="quiet" disabled>启动 Actor</button><button id="stop-learner" class="quiet" disabled>停止 Learner 并保存</button><span id="learner-resume-detail" class="muted">启动 Learner 会新建训练；已有 checkpoint 可通过续训恢复。</span></div>
+      <div id="controller-controls" class="controller-controls" role="group" aria-label="底层控制服务" aria-busy="false" data-phase="unknown">
+        <div class="controller-reading"><span class="small-label">底层控制服务</span><strong id="controller-state" role="status">未检查</strong><span id="controller-detail" class="muted">停止 Actor 后可恢复底层服务；Learner 可继续运行。</span><span id="controller-safety" class="muted">启动控制器前，请确认工作区安全且 E-stop 可随时操作。</span></div>
+        <div class="controller-actions"><button id="controller-refresh" class="quiet" disabled>检查服务状态</button><button id="controller-recover" class="quiet" aria-describedby="controller-safety" disabled>恢复底层服务</button></div>
+      </div>
+      <div class="gripper-controls" role="group" aria-label="夹爪调试">
+        <div class="gripper-reading"><span class="small-label">夹爪调试</span><strong id="gripper-width">尚未读取开口</strong><span id="gripper-detail" class="muted" role="status">请在 Actor 停止、暂停或等待复位时调整夹爪。</span></div>
+        <div class="gripper-actions"><button id="gripper-refresh" class="quiet" disabled>读取开口</button><button id="gripper-open" class="quiet" disabled>张开夹爪</button><button id="gripper-close" class="quiet" disabled>闭合夹爪</button></div>
+      </div>
+      <div class="camera-grid"><figure class="camera"><div class="camera-empty"><span class="camera-glyph">◉</span><p>等待腕部相机</p><span>720p · 连续录像</span></div><img id="preview-wrist_1" alt="腕部相机实时预览" hidden><figcaption><span>腕部视角</span><span id="wrist-state">未连接</span></figcaption></figure><figure class="camera"><div class="camera-empty"><span class="camera-glyph">◉</span><p>等待侧面相机</p><span>720p · 连续录像</span></div><img id="preview-side_policy" alt="侧面相机实时预览" hidden><figcaption><span>侧面视角</span><span id="side-state">未连接</span></figcaption></figure></div>
+      <div class="metrics"><div><span class="small-label">Learner</span><strong id="learner-status">未运行</strong><span id="learner-detail" class="muted">每轮训练使用新目录</span></div><div><span class="small-label">已完成</span><strong id="episodes-count">0 条</strong><span class="muted">按人工最终标签统计</span></div><div><span class="small-label">记录</span><strong id="recording-status">等待启动</strong><span class="muted">全程视频 · 有效段轨迹</span></div><div><span class="small-label">磁盘可用</span><strong id="disk-free">—</strong><span id="disk-reserve" class="muted">保留 8 GiB</span></div></div>
+      <details class="logs"><summary>运行日志与 checkpoint</summary><div id="runtime-details" class="muted"></div><pre id="logs-output">任务启动后显示日志。</pre></details>
+    </section>
+    <section id="replay" class="view"><div class="title-row"><div><p class="eyebrow">训练归档</p><h1>回放与数据</h1><p class="muted">查看完整视频，按标签选择有效 episode。</p></div></div><div id="replay-content" class="empty-state">还没有录制记录。新的任务会自动保存在数据目录。</div></section>
+    <section id="settings" class="view"><div class="title-row"><div><p class="eyebrow">统一配置</p><h1>运行设置</h1><p class="muted">训练、评估与示教共用采集和控制设置。</p></div></div><div id="settings-content"></div></section>
+  </main>
+  <footer><span>视频包含等待与复位；可复用轨迹只包含有效任务段。</span><span id="storage-path"></span></footer>
+  <script src="/app.js"></script>
+</body>
+</html>

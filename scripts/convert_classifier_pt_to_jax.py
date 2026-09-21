@@ -202,18 +202,16 @@ def _flatten_params(params, prefix: str):
         yield prefix, params
 
 
-def _unflatten_params(flat: dict, template: dict):
+def _unflatten_params(flat: dict, template: dict, prefix: str = ""):
     """从展平的参数重建嵌套树。"""
-    import jax.numpy as jnp
-
     if isinstance(template, dict):
         result = {}
         for k, v in template.items():
-            result[k] = _unflatten_params(flat, v)
+            path = f"{prefix}/{k}" if prefix else k
+            result[k] = _unflatten_params(flat, v, path)
         return result
     else:
-        # 叶节点 — 从 flat dict 取值
-        return template  # 保持原始值 (如果未被映射)
+        return flat.get(prefix, template)
 
 
 # ---------------------------------------------------------------------------

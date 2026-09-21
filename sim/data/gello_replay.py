@@ -18,12 +18,12 @@
        each (3, 128, 128) uint8 CHW. side_classifier 是 side_policy 的 alias
        (per sim/data/contract.IMAGE_KEY_ALIAS_MAP)。capture_observation 内部
        渲染单视图 (pixels), 由 _build_image_dict() 拼成 3 键。
-     - state:  25D SERL state per STATE_KEYS_ORDERED
-       (tcp_pose 7 + tcp_vel 6 + tcp_force 3 + tcp_torque 3 + gripper 6 = 25)
+     - state:  19D live SERL flat state per STATE_KEYS_ORDERED
+       (gripper 1 + tcp_force 3 + tcp_pose 6 + tcp_torque 3 + tcp_vel 6)
   5. 构建 SERL pkl transitions list
 
-A2: 8D 旧实现 (joint 7 + gripper 1) → 25D 新实现 (per sim/data/contract.py)
-    force/torque 暂填 0 (A9 之后接 contact sensor)。
+A2/T3: 8D/25D 旧实现 → live SERL19 flat state (per sim/data/contract.py).
+    force/torque 暂填 0 (A9 之后接 contact sensor).
 
 用法 (on fr3-desktop-ts):
     # Activate the sim-side conda env first (caller's responsibility):
@@ -298,12 +298,11 @@ def capture_observation(
     prev_tcp_pose: Optional[np.ndarray] = None,
     dt: float = 1.0 / 30.0,
 ) -> dict[str, np.ndarray]:
-    """从 sim 中读取 observation，产 25D state (per sim/data/contract.py)。
+    """从 sim 中读取 observation，产 live SERL19 state (per sim/data/contract.py)。
 
     State ordering (must match STATE_KEYS_ORDERED):
-      tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper_pose(6) = 25D
-      (gripper tiled 6× to match wrapper.py 25D distribution; arith 7+6+3+3+1=20
-      conflicts with wrapper.py 25D — see contract.py docstring for resolution.)
+      gripper_pose(1) + tcp_force(3) + tcp_pose(6 pos+euler)
+      + tcp_torque(3) + tcp_vel(6) = 19D
 
     Args:
         scene: InteractiveScene (or None in pure-FK mode)
@@ -311,12 +310,12 @@ def capture_observation(
         gripper_states: 全部夹爪状态 (N,)
         step_idx: 当前帧索引
         device: torch device
-        prev_tcp_pose: 上一帧 tcp_pose (7D pos+quat-xyzw); 第一次调用传 None
+        prev_tcp_pose: 上一帧 tcp_pose (6D pos+euler); 第一次调用传 None
         dt: 时间步长 (s)
 
     Returns:
-        {"state": (25,) float32, "pixels": (3, 128, 128) uint8,
-         "tcp_pose_out": (7,) 用于下一次调用 prev_tcp_pose}
+        {"state": (19,) float32, "pixels": (3, 128, 128) uint8,
+         "tcp_pose_out": (6,) 用于下一次调用 prev_tcp_pose}
     """
     from sim.data.contract import STATE_DIMS, STATE_KEYS_ORDERED
 
@@ -326,12 +325,12 @@ def capture_observation(
     else:
         q_actual = np.asarray(joint_poses[step_idx], dtype=np.float64)
 
-    # 2) tcp_pose: pos(3) + quat_xyzw(4) = 7D (first 7 of the 25D)
+    # 2) tcp_pose: pos(3) + euler_xyz(3) = 6D live state sub-block.
     from sim.kinematics.fr3_fk import fk_ee_pose
     T_ee = fk_ee_pose(q_actual)  # 4x4 transform
     tcp_pos = T_ee[:3, 3]
-    tcp_quat = _rotmat_to_quat_xyzw(T_ee[:3, :3])
-    tcp_pose = np.concatenate([tcp_pos, tcp_quat]).astype(np.float64)  # (7,)
+    tcp_euler = _rotmat_to_euler_xyz(T_ee[:3, :3])
+    tcp_pose = np.concatenate([tcp_pos, tcp_euler]).astype(np.float64)  # (6,)
 
     # 3) tcp_vel: 数值差分 pos(3) + angular placeholder(3) = 6D
     if prev_tcp_pose is None:
@@ -345,16 +344,11 @@ def capture_observation(
     tcp_force = np.zeros(3, dtype=np.float64)
     tcp_torque = np.zeros(3, dtype=np.float64)
 
-    # 5) gripper_pose: 第 8 轴位置 (1D scalar)  — 25D spec requires a
-    #    1D gripper value; mainline 25D distribution is
-    #    tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper(6) = 25
-    #    per wrapper.py:23-25 comment. To match 25D exactly, we tile the
-    #    gripper scalar 6 times (this is the A2 hard-freeze reconciliation;
-    #    see VERIFY.md and contract.py docstring for the arith 20 vs 25 conflict).
+    # 5) gripper_pose: live SERL flat state keeps a single scalar at index 0.
     gripper_scalar = float(gripper_states[step_idx])
-    gripper_pose = np.full(6, gripper_scalar, dtype=np.float64)  # (6,) → 25D total
+    gripper_pose = np.array([gripper_scalar], dtype=np.float64)
 
-    # 6) 按 STATE_KEYS_ORDERED 拼接 → 25D
+    # 6) 按 STATE_KEYS_ORDERED 拼接 → 19D live flat order.
     state_parts = {
         "tcp_pose": tcp_pose,
         "tcp_vel": tcp_vel,
@@ -370,6 +364,25 @@ def capture_observation(
              else np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
 
     return {"state": state, "pixels": pixels, "tcp_pose_out": tcp_pose}
+
+
+def _rotmat_to_euler_xyz(R: np.ndarray) -> np.ndarray:
+    """Convert 3x3 rotation matrix to Euler xyz angles.
+
+    This mirrors scipy ``Rotation.as_euler("xyz")`` for the non-singular poses
+    used in plug insertion, while keeping this sim/data path numpy-only.
+    """
+    R = np.asarray(R, dtype=np.float64)
+    sy = float(np.hypot(R[0, 0], R[1, 0]))
+    if sy > 1e-9:
+        x = np.arctan2(R[2, 1], R[2, 2])
+        y = np.arctan2(-R[2, 0], sy)
+        z = np.arctan2(R[1, 0], R[0, 0])
+    else:
+        x = np.arctan2(-R[1, 2], R[1, 1])
+        y = np.arctan2(-R[2, 0], sy)
+        z = 0.0
+    return np.array([x, y, z], dtype=np.float64)
 
 
 def _rotmat_to_quat_xyzw(R: np.ndarray) -> np.ndarray:
@@ -482,7 +495,7 @@ def replay_in_sim(
     # rpy to ACTION_SCALE[3]=0.1 (NOT [1]=0.015) or rpy is ~6.7x over-scaled then saturates.
     action_scale = [ACTION_SCALE[0], ACTION_SCALE[3], ACTION_SCALE[6]]
     start_time = time.time()
-    # A2: 25D state needs prev_tcp_pose for tcp_vel numerical differentiation
+    # T3: live state needs prev_tcp_pose for tcp_vel numerical differentiation.
     prev_tcp_pose = None
 
     for step in range(N):
@@ -499,7 +512,7 @@ def replay_in_sim(
             sim.step()
         scene.update(sim.get_physics_dt())
 
-        # 记录 observation (A2: 25D state via capture_observation with prev_tcp_pose)
+        # 记录 observation (live SERL19 state via capture_observation).
         obs = capture_observation(
             scene, joint_poses, gripper_states, step, device,
             prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
@@ -519,7 +532,7 @@ def replay_in_sim(
         done = (step == N - 1)
         mask = np.float32(1.0 - float(done))
 
-        # next_obs: 下一帧或最后一帧自身 (A2: 25D; pass current prev_tcp_pose)
+        # next_obs: 下一帧或最后一帧自身; pass current prev_tcp_pose.
         next_step = min(step + 1, N - 1)
         next_obs = capture_observation(
             scene, joint_poses, gripper_states, next_step, device,
@@ -632,7 +645,7 @@ def replay_pure_fk(
 
     用于无 GPU 的开发环境或快速验证。
 
-    A2: produces 25D state via capture_observation() (calls it with
+    T3: produces live SERL19 state via capture_observation() (calls it with
     scene=None and prev_tcp_pose threaded through the loop).
     """
     joint_poses = demo["joint_poses"]
@@ -649,7 +662,7 @@ def replay_pure_fk(
     # live/pinocchio-validated hybrid_teleop.CorrectFK). The external
     # scripts/fk_converter (standard-DH, ~50cm-wrong per hybrid_teleop
     # docstring) and its fr3-desktop twin are NO LONGER used as the
-    # delta source here. capture_observation() already derives the 25D
+    # delta source here. capture_observation() already derives the live
     # tcp_pose from fr3_fk, so the action deltas and the state now ride
     # ONE FK (verified: fr3_fk vs scripts/fk_converter differ by up to
     # 1.31 m / 180 deg over random q).
@@ -666,10 +679,10 @@ def replay_pure_fk(
     pixels_placeholder = np.zeros((IMAGE_C, IMAGE_H, IMAGE_W), dtype=np.uint8)
 
     transitions = []
-    # A2: thread prev_tcp_pose through capture_observation() for tcp_vel
+    # T3: thread prev_tcp_pose through capture_observation() for tcp_vel.
     prev_tcp_pose = None
     for i in range(N):
-        # A2: produce 25D state via capture_observation (same code path as sim)
+        # T3: produce live SERL19 state via capture_observation.
         obs = capture_observation(
             scene=None, joint_poses=joint_poses, gripper_states=gripper_states,
             step_idx=i, device="cpu", prev_tcp_pose=prev_tcp_pose, dt=1.0 / 30.0,
@@ -777,7 +790,7 @@ def validate_output(pkl_path: str) -> bool:
             print(f"[FAIL] {k} shape {img.shape} != ({IMAGE_C},{IMAGE_H},{IMAGE_W})")
             ok = False
 
-    # A2: state dim must match sim/data/contract.STATE_DIMS (25D)
+    # State dim must match sim/data/contract.STATE_DIMS.
     from sim.data.contract import STATE_DIMS
     if state_dim != (STATE_DIMS,):
         print(f"[FAIL] state shape {state_dim} != ({STATE_DIMS},)")

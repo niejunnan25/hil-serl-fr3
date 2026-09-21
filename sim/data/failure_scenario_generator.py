@@ -6,7 +6,7 @@
   3. insufficient_force: 最后 N 帧提前 close_gripper
   4. drop:              中段 release_gripper
 
-复用 sim/data/gello_replay.py 的 replay_pure_fk 骨架产 25D state trajectory,
+复用 sim/data/gello_replay.py 的 replay_pure_fk 骨架产 live SERL19 state trajectory,
 然后扰动轨迹生成 failure cases。输出: SERL pkl, 全 reward=0。
 
 不调 IsaacLab runtime; 用纯 FK 路径 (replay_pure_fk) 生成 state, 扰动由
@@ -30,6 +30,7 @@ from sim.data.contract import (
     FAILURE_REWARD,
     IMAGE_SHAPE,
     STATE_DIMS,
+    STATE_TCP_POSE_SLICE,
     VALID_PKL_IMAGE_KEYS,
 )
 from sim.data.gello_replay import _build_image_dict, replay_pure_fk
@@ -97,20 +98,21 @@ class FailureScenarioGenerator:
         """轨迹整体在 xy 平面偏移 ±3cm; state 不变, action 仍按原 demo 算.
 
         物理意义: plug 不在 socket 正上方, 插不进去 → reward=0。
-        实现: 产 original 25D state trajectory (replay_pure_fk), 但在最后 transition 的
-        reward 全 0, 并在 obs.state[0:2] 注入 xy offset 作为 perturbation marker
+        实现: 产 original live SERL19 state trajectory (replay_pure_fk), 但在最后 transition 的
+        reward 全 0, 并在 obs.state[tcp_pose x:y] 注入 xy offset 作为 perturbation marker
         (供下游训练区分 mis_alignment vs 其他 failure classes)。
         """
         transitions = replay_pure_fk(demo, max_frames=len(demo["joint_poses"]))
         # sample xy offset
         dx = float(self._rng.uniform(-FAILURE_MISALIGNMENT_XY_M, FAILURE_MISALIGNMENT_XY_M))
         dy = float(self._rng.uniform(-FAILURE_MISALIGNMENT_XY_M, FAILURE_MISALIGNMENT_XY_M))
-        # 在第一个 transition 的 state[0:2] 注入 offset marker (tcp_pose[:2])
+        # 在第一个 transition 的 tcp_pose[:2] 注入 offset marker.
         for i, t in enumerate(transitions):
             if i == 0:
                 t["observations"]["state"] = t["observations"]["state"].copy()
-                t["observations"]["state"][0] += dx
-                t["observations"]["state"][1] += dy
+                tcp_pose_start = STATE_TCP_POSE_SLICE.start
+                t["observations"]["state"][tcp_pose_start] += dx
+                t["observations"]["state"][tcp_pose_start + 1] += dy
             t["rewards"] = np.float32(FAILURE_REWARD)
             t["masks"] = np.float32(0.0)
             t["dones"] = True
@@ -123,25 +125,17 @@ class FailureScenarioGenerator:
     def gen_angle_offset(
         self, demo: dict, output_path: Optional[str] = None,
     ) -> list[dict]:
-        """trajectory 整体 z 旋转 ±10°; 在 tcp_pose quat 部分注入."""
+        """trajectory 整体 z 旋转 ±10°; 在 tcp_pose euler yaw 部分注入."""
         transitions = replay_pure_fk(demo, max_frames=len(demo["joint_poses"]))
         # sample angle
         angle_rad = np.deg2rad(
             float(self._rng.uniform(-FAILURE_ANGLE_OFFSET_DEG, FAILURE_ANGLE_OFFSET_DEG))
         )
-        # 在第一个 transition 的 state[3:7] (tcp_pose quat xyzw) 注入 z 旋转
-        # 简化: 把 quat 替换为 identity (代表"完全偏角度, 没法精确算 z 旋 quat")
-        # 完整实现需 quaternion multiply, 但本 plan smoke test 只验 schema + reward
         for i, t in enumerate(transitions):
             if i == 0:
                 t["observations"]["state"] = t["observations"]["state"].copy()
-                # tcp_pose quat 部分 (state[3:7] per STATE_KEYS_ORDERED index)
-                # z 旋 quat = [cos(a/2), 0, 0, sin(a/2)] (xyzw)
-                half = angle_rad / 2.0
-                t["observations"]["state"][3] = 0.0  # qx
-                t["observations"]["state"][4] = 0.0  # qy
-                t["observations"]["state"][5] = float(np.sin(half))  # qz
-                t["observations"]["state"][6] = float(np.cos(half))  # qw
+                # tcp_pose = pos(3) + euler_xyz(3), yaw is offset +5.
+                t["observations"]["state"][STATE_TCP_POSE_SLICE.start + 5] += angle_rad
             t["rewards"] = np.float32(FAILURE_REWARD)
             t["masks"] = np.float32(0.0)
             t["dones"] = True

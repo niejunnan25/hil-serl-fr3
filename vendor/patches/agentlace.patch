@@ -1,0 +1,470 @@
+diff --git a/README.md b/README.md
+index c145cfbbe9ea42326e3b1c777e8c01e1f897c00e..7940240b5e1b2c0352c099eb23e2c10460371a5b 100644
+--- a/README.md
++++ b/README.md
+@@ -183,6 +183,13 @@ def _recv_weights(new_weights):
+ 
+ trainer_client.recv_network_callback(_recv_weights)
+ 
++# PUB/SUB is a best-effort broadcast.  A client that starts after the latest
++# publication can pull the authoritative snapshot from the request channel.
++snapshot = trainer_client.get_network()
++if snapshot is not None:
++    _recv_weights(snapshot["params"])
++    print("policy revision", snapshot["revision"])
++
+ # automatically update datastore every 10 seconds
+ trainer.client.start_async_update(interval=10)
+ 
+diff --git a/agentlace/trainer.py b/agentlace/trainer.py
+index 50b7736e6e018f71ce2705b5b356ce8b1918ea0b..8227d857e02d84ead2a25c38fca82e1892d4bc92 100644
+--- a/agentlace/trainer.py
++++ b/agentlace/trainer.py
+@@ -15,6 +15,7 @@ import time
+ import threading
+ import logging
+ import json
++import uuid
+ from dataclasses import dataclass, asdict, field
+ 
+ 
+@@ -33,7 +34,7 @@ class TrainerConfig():
+     broadcast_port: int = 5556
+     request_types: List[str] = field(default_factory=list)
+     rate_limit: Optional[int] = None
+-    version: str = "0.0.2"
++    version: str = "0.0.3"
+     experimental_pipeline_port: Optional[str] = None
+ 
+ 
+@@ -79,8 +80,18 @@ class TrainerServer:
+         self.request_types = set(config.request_types)  # faster lookup
+         self.data_stores = {}  # map of {ds_name: DataStoreBase}
+         self.last_update_id_map = {}  # map of {ds_name: last_update_id}
++        self._client_update_ids = {}
++        self._data_activity = {}
++        self._data_lock = threading.RLock()
+         self.config = config
+         self.data_callback = data_callback
++        # Keep a latest-value cache for the policy snapshot endpoint.  PUB/SUB
++        # is intentionally lossy (a subscriber that joins late misses earlier
++        # broadcasts), so the request channel must have an authoritative value
++        # that a client can pull after subscribing or reconnecting.
++        self._network_lock = threading.Lock()
++        self._network_payload = None
++        self._network_revision = 0
+ 
+         ############################################################################
+         def __callback_impl(data: dict) -> dict:
+@@ -90,14 +101,41 @@ class TrainerServer:
+             # insert data to the data store
+             if _type == "datastore":
+                 store_name = data.get("store_name")
++                if not isinstance(_payload, dict):
++                    return {"success": False, "message": "Invalid datastore payload"}
+                 last_update_id = _payload.get("last_id", -1)
+                 if store_name not in self.data_stores:
+                     return {"success": False, "message": "Invalid datastore name"}
+                 batch_data = _payload.get("data", [])
+-                self.data_stores[store_name].batch_insert(batch_data)
+-                if data_callback:
+-                    data_callback(store_name, _payload)
+-                self.last_update_id_map[store_name] = last_update_id
++                client_id = data.get("client_id")
++                if (type(last_update_id) is not int or not isinstance(batch_data, (list, tuple))
++                        or (client_id is not None and not isinstance(client_id, str))):
++                    return {"success": False, "message": "Invalid datastore batch identity"}
++                with self._data_lock:
++                    activity = self._data_activity[store_name]
++                    if activity.get("error"):
++                        return {"success": False, "message": activity["error"], "delivery_unknown": True}
++                    if not batch_data:
++                        return {"success": True}  # No insertion means no cursor advancement.
++                    cursor = self._client_update_ids.get((client_id, store_name), -1)
++                    if client_id and last_update_id <= cursor:
++                        return {"success": True}  # Lost ACK: already committed.
++                    try:
++                        self.data_stores[store_name].batch_insert(batch_data)
++                        if data_callback:
++                            data_callback(store_name, _payload)
++                    except Exception as exc:
++                        # A store can fail after a partial insertion. Freeze it
++                        # rather than retry ambiguously or kill the policy server.
++                        message = f"Datastore insertion failed: {type(exc).__name__}: {exc}"
++                        activity["error"] = message
++                        logging.exception(message)
++                        return {"success": False, "message": message, "delivery_unknown": True}
++                    self.last_update_id_map[store_name] = last_update_id
++                    self._client_update_ids[client_id, store_name] = last_update_id
++                    if batch_data:
++                        activity.update(received_count=activity["received_count"] + len(batch_data),
++                                        last_received_monotonic=time.monotonic(), client_id=client_id)
+                 return {"success": True}
+ 
+             # get last update id of the data store
+@@ -105,13 +143,33 @@ class TrainerServer:
+                 store_name = _payload.get("store_name")
+                 if store_name not in self.data_stores or store_name not in self.last_update_id_map:
+                     return {"success": False, "message": "Invalid datastore name"}
+-                return {"success": True, "payload": self.last_update_id_map.get(store_name, -1)}
++                client_id = _payload.get("client_id")
++                with self._data_lock:
++                    cursor = (self._client_update_ids.get((client_id, store_name), -1) if client_id
++                              else self.last_update_id_map.get(store_name, -1))
++                return {"success": True, "payload": cursor}
+ 
+             # get the config of the server, client can check compatibility
+             elif _type == "hash":
+                 config_json = json.dumps(asdict(config), separators=(',', ':'))
+                 return {"success": True, "payload": config_json}
+ 
++            # Return the latest policy snapshot.  This is a built-in request so
++            # existing TrainerConfig.request_types values remain compatible;
++            # clients do not need to add a custom request type for the
++            # reliability path.
++            elif _type == "get-network":
++                with self._network_lock:
++                    payload = self._network_payload
++                    revision = self._network_revision
++                if payload is None:
++                    return {"success": False, "message": "No network published yet"}
++                return {
++                    "success": True,
++                    "payload": payload,
++                    "revision": revision,
++                }
++
+             # custom request
+             elif _type in self.request_types:
+                 return request_callback(_type, _payload) if request_callback else {}
+@@ -127,18 +185,10 @@ class TrainerServer:
+         # NOTE: experimental feature to use pipeline for data update
+         if config.experimental_pipeline_port:
+             def _pipe_callback_impl(data: Any):
+-                # NOTE insert data to the data store similar as above
+-                _payload = data.get("payload")
+-                store_name = data.get("store_name")
+-                last_update_id = _payload.get("last_id", -1)
+-                if store_name not in self.data_stores:
+-                    return
+-                batch_data = _payload.get("data", [])
+-                self.data_stores[store_name].batch_insert(batch_data)
+-                if self.data_callback:
+-                    self.data_callback(store_name, _payload)
+-                self.last_update_id_map[store_name] = last_update_id
+-                return
++                # Share deduplication and freshness semantics with REQ/REP.
++                result = __callback_impl(dict(data, type="datastore"))
++                if not result.get("success"):
++                    logging.error("Pipeline datastore update rejected: %s", result.get("message"))
+             self.consumer = Consumer(
+                 _pipe_callback_impl, config.experimental_pipeline_port)
+             self.consumer.async_start()
+@@ -155,6 +205,13 @@ class TrainerServer:
+         """
+         self.data_stores[name] = data_store
+         self.last_update_id_map[name] = -1
++        self._data_activity[name] = dict(received_count=0, last_received_monotonic=None, client_id=None)
++
++    def get_data_activity(self, name):
++        """Actual online arrivals, excluding demonstration/replay bootstrap."""
++        with self._data_lock:
++            return dict(self._data_activity.get(name, {
++                "received_count": 0, "last_received_monotonic": None, "client_id": None}))
+ 
+     def data_store(self, name) -> Optional[DataStoreBase]:
+         """
+@@ -173,10 +230,32 @@ class TrainerServer:
+ 
+     def publish_network(self, payload: dict):
+         """
+-        Publishes the network to the broadcast server.
++        Cache and publish the network to the broadcast server.
++
++        ``revision`` is monotonically increasing per server process.  The
++        broadcast payload remains unchanged for wire compatibility; clients
++        that need a lossless initial value use ``TrainerClient.get_network()``.
++        """
++        with self._network_lock:
++            self._network_payload = payload
++            self._network_revision += 1
++        self.broadcast_server.broadcast(payload)
++
++    def broadcast_network(self, payload: dict):
++        """Broadcast a payload without changing the authoritative snapshot.
++
++        This is used for bounded startup retries.  Retries must not advance the
++        server revision or race a regular update into an apparent newer policy.
+         """
+         self.broadcast_server.broadcast(payload)
+ 
++    def latest_network(self):
++        """Return ``(payload, revision)`` for diagnostics and local adapters."""
++        with self._network_lock:
++            if self._network_payload is None:
++                return None, self._network_revision
++            return self._network_payload, self._network_revision
++
+     def start(self, threaded: bool = False):
+         """
+         Starts the server, defaulting to blocking mode
+@@ -190,8 +269,15 @@ class TrainerServer:
+             self.req_rep_server.run()
+ 
+     def stop(self):
+-        """Stop the server"""
++        """Let the request owner leave recv before closing its ZeroMQ socket."""
++        self.req_rep_server.is_kill = True
++        worker = getattr(self, "thread", None)
++        if worker is not None and worker is not threading.current_thread():
++            worker.join(timeout=5)
++            if worker.is_alive():
++                raise RuntimeError("Trainer request handler did not finish before shutdown")
+         self.req_rep_server.stop()
++        self.broadcast_server.stop()
+ 
+ 
+ ##############################################################################
+@@ -207,6 +293,7 @@ class TrainerClient:
+                  log_level=logging.INFO,
+                  wait_for_server: bool = False,
+                  timeout_ms: float = 800,
++                 client_id: Optional[str] = None,
+                  ):
+         """
+         Args:
+@@ -223,6 +310,7 @@ class TrainerClient:
+             multiple data stores in single client, use `data_stores_map` instead.
+         """
+         self.client_name = name
++        self.client_id = client_id or uuid.uuid4().hex
+         self.req_rep_client = ReqRepClient(
+             server_ip, config.port_number, log_level=log_level, timeout_ms=timeout_ms)
+         self.broadcast_client = None
+@@ -290,7 +378,8 @@ class TrainerClient:
+                 from_id = self.get_server_last_update_id(name)
+                 if from_id is None:
+                     return False
+-                self.update_datastore(name, from_id)
++                if not self.update_datastore(name, from_id):
++                    return False
+             return True
+         return False
+ 
+@@ -348,7 +437,7 @@ class TrainerClient:
+             :param name: Name of the data store
+             :return: Last update id of the server's data store
+         """
+-        msg = {"type": "get_last_update_id", "payload": {"store_name": name}}
++        msg = {"type": "get_last_update_id", "payload": {"store_name": name, "client_id": self.client_id}}
+         res = self.req_rep_client.send_msg(msg)
+         if res is None or not res["success"]:
+             logging.warning("Failed to get last update id")
+@@ -380,6 +469,25 @@ class TrainerClient:
+             self.server_ip, self.config.broadcast_port, log_level=self.log_level)
+         self.broadcast_client.async_start(callback)
+ 
++    def get_network(self, timeout_ms: Optional[float] = None) -> Optional[dict]:
++        """Fetch the latest policy snapshot from the trainer.
++
++        Returns a mapping with ``params`` and a monotonic server ``revision``.
++        ``None`` means the request timed out, the server has not published a
++        policy yet, or the server returned an unsuccessful response.  The
++        method is deliberately separate from ``request()`` so this built-in
++        reliability endpoint does not change existing custom request configs.
++        """
++        res = self.req_rep_client.send_msg(
++            {"type": "get-network", "payload": {}}, timeout_ms=timeout_ms
++        )
++        if res is None or not res.get("success"):
++            return None
++        if "payload" not in res:
++            logging.warning("Trainer returned a network response without payload")
++            return None
++        return {"params": res["payload"], "revision": int(res.get("revision", 0))}
++
+     def start_async_update(self, interval: int = 10):
+         """
+         Start a thread that server's datastore every `interval` seconds.
+@@ -414,7 +522,7 @@ class TrainerClient:
+             :param data: Payload to send to the trainer
+             :return: Response from the trainer, return None if timeout
+         """
+-        msg = {"type": "datastore", "store_name": name, "payload": data}
++        msg = {"type": "datastore", "store_name": name, "payload": data, "client_id": self.client_id}
+ 
+         # NOTE: experimental feature to use pipeline for data update
+         if self.config.experimental_pipeline_port:
+@@ -426,8 +534,10 @@ class TrainerClient:
+             logging.warning("Rate limit exceeded")
+             return None
+         self.last_request_time = time.time()
+-        self.req_rep_client.send_msg(msg)
+-        return {"success": True}
++        res = self.req_rep_client.send_msg(msg)
++        if res is None or not res.get("success", False):
++            return res
++        return res
+ 
+ ##############################################################################
+ 
+@@ -444,6 +554,8 @@ class TrainerSMInterface:
+     def __init__(self):
+         self._recv_network_fn = None
+         self._req_callback_fn = None
++        self._network_payload = None
++        self._network_revision = 0
+ 
+     def recv_network_callback(self, callback_fn: Callable):
+         """Refer to TrainerClient.recv_network_callback()"""
+@@ -451,9 +563,17 @@ class TrainerSMInterface:
+ 
+     def publish_network(self, params: dict):
+         """Refer to TrainerClient.recv_network_callback()"""
++        self._network_payload = params
++        self._network_revision += 1
+         if self._recv_network_fn:
+             self._recv_network_fn(params)
+ 
++    def get_network(self) -> Optional[dict]:
++        """Return the latest in-process network snapshot."""
++        if self._network_payload is None:
++            return None
++        return {"params": self._network_payload, "revision": self._network_revision}
++
+     def start(self, *args, **kwargs):
+         pass  # Do nothing
+ 
+diff --git a/agentlace/zmq_wrapper/broadcast.py b/agentlace/zmq_wrapper/broadcast.py
+index af8d3c50e3b746e5cb021710191ee9bc8c3d3067..cee15cc836e9c250c7ed5a8d1450990ca330eb31 100644
+--- a/agentlace/zmq_wrapper/broadcast.py
++++ b/agentlace/zmq_wrapper/broadcast.py
+@@ -16,6 +16,8 @@ class BroadcastServer:
+                  compression: str = 'lz4'):
+         self.context = zmq.Context()
+         self.socket = self.context.socket(zmq.PUB)
++        # Socket options must be set before bind/connect to apply reliably to
++        # the underlying transport.
+         self.socket.setsockopt(zmq.SNDHWM, 3)  # queue size 3 for send buffer
+         self.socket.bind(f"tcp://*:{port}")
+         self.compress, _ = make_compression_method(compression)
+@@ -26,6 +28,13 @@ class BroadcastServer:
+         serialized = self.compress(message)
+         self.socket.send(serialized)
+ 
++    def stop(self):
++        """Close the PUB socket without waiting on queued messages."""
++        if self.socket is not None and not self.socket.closed:
++            self.socket.close(linger=0)
++        if self.context is not None:
++            self.context.term()
++
+ ##############################################################################
+ 
+ class BroadcastClient:
+@@ -38,19 +47,19 @@ class BroadcastClient:
+         logging.debug(f"Subscriber client is connecting to {ip}:{port}")
+ 
+         self.socket = self.context.socket(zmq.SUB)
+-        self.socket.connect(f"tcp://{ip}:{port}")
++        # Configure subscription, conflation and receive limits before the
++        # connection is established.  This avoids relying on late option
++        # propagation and keeps the newest policy when the actor is slow.
+         self.socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all messages
+-        _, self.decompress = make_compression_method(comppression)
+-        # Set a timeout for the recv method (e.g., 1.5 second)
+         self.socket.setsockopt(zmq.RCVTIMEO, 1500)
+-
+-        # ZMQ will queue up msg with slow connections. This resulted in
+-        # the new updated weights being queued up, actor is not able to learn
+-        # https://stackoverflow.com/questions/59542620/zmq-drop-old-messages
+         self.socket.setsockopt(zmq.CONFLATE, True)
+         self.socket.setsockopt(zmq.RCVHWM, 3)  # queue size 3 for receive buffer
++        self.socket.connect(f"tcp://{ip}:{port}")
++        _, self.decompress = make_compression_method(comppression)
+         self.is_kill = False
+         self.thread = None
++        self.last_error = None
++        self.error_event = threading.Event()
+ 
+     def async_start(self, callback: Callable[[dict], None]):
+         def async_listen():
+@@ -62,14 +71,25 @@ class BroadcastClient:
+                 except zmq.Again:
+                     # Timeout occurred, check is_kill flag again
+                     continue
+-        self.thread = threading.Thread(target=async_listen)
++                except Exception as exc:
++                    # A listener exception otherwise silently kills the
++                    # callback thread and leaves the Actor waiting forever.
++                    self.last_error = exc
++                    self.error_event.set()
++                    logging.exception("Broadcast listener failed")
++                    self.is_kill = True
++                    break
++        self.thread = threading.Thread(target=async_listen, name="agentlace-broadcast-listener", daemon=True)
+         self.thread.start()
+     
+     def stop(self):
+         self.is_kill = True # kill the thread
+         if self.thread:
+-            self.thread.join()  # ensure the thread exits
+-        self.socket.close()
++            self.thread.join(timeout=2)  # ensure the thread exits
++        if self.socket is not None and not self.socket.closed:
++            self.socket.close(linger=0)
++        if self.context is not None:
++            self.context.term()
+ 
+ ##############################################################################
+ 
+diff --git a/agentlace/zmq_wrapper/req_rep.py b/agentlace/zmq_wrapper/req_rep.py
+index ea7d91a5c5bf8d9f93442a106a271e04b77b576f..8f2838023e594a9b8d8008f9f330302bf6e2007f 100644
+--- a/agentlace/zmq_wrapper/req_rep.py
++++ b/agentlace/zmq_wrapper/req_rep.py
+@@ -118,18 +118,30 @@ class ReqRepClient:
+         self.socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+         self.socket.connect(f"tcp://{self.ip}:{self.port}")
+ 
+-    def send_msg(self, request: dict, wait_for_response=True) -> Optional[str]:
++    def send_msg(self, request: dict, wait_for_response=True,
++                 timeout_ms: Optional[float] = None) -> Optional[str]:
++        """Send a request, optionally using a per-call receive timeout.
++
++        Large policy snapshots can take longer to serialize and transfer than
++        the short control-plane timeout used for hashes and datastore updates.
++        The override is scoped to this request and the socket's configured
++        default is restored afterwards.
++        """
+         if self.socket is None or self.socket.closed:
+             logging.debug("WARNING: Socket is closed, reseting...")
+             return None
+ 
+         serialized = self.compress(request)
+         with self._internal_lock:
++            socket_ref = self.socket
++            restore_timeout = timeout_ms is not None
++            if restore_timeout:
++                socket_ref.setsockopt(zmq.RCVTIMEO, max(1, int(timeout_ms)))
+             try:
+-                self.socket.send(serialized)
++                socket_ref.send(serialized)
+                 if wait_for_response is False:
+                     return None
+-                message = self.socket.recv()
++                message = socket_ref.recv()
+                 return self.decompress(message)
+             except Exception as e:
+                 # accepts timeout exception
+@@ -138,6 +150,11 @@ class ReqRepClient:
+                 logging.debug(f"WARNING: No res from server. reset socket.")
+                 self.reset_socket()
+                 return None
++            finally:
++                # A failed request may replace ``self.socket`` in reset_socket;
++                # never mutate that fresh socket back to the per-call value.
++                if restore_timeout and self.socket is socket_ref and not socket_ref.closed:
++                    socket_ref.setsockopt(zmq.RCVTIMEO, self.timeout_ms)
+ 
+     def __del__(self):
+         if self.socket:

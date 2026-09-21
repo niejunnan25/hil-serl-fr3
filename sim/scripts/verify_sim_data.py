@@ -2,7 +2,7 @@
 
 CRITICAL (codex #1, #2 fix):
   - 3 image keys: side_policy + wrist_1 + side_classifier
-  - state keys 必须按 STATE_KEYS_ORDERED 顺序拼接 (OrderedDict comparison)
+  - state keys 必须按 live STATE_KEYS_ORDERED 顺序拼接 (OrderedDict comparison)
   - dtype/shape 全断言
 
 Usage:
@@ -27,22 +27,11 @@ from sim.data.contract import (
 )
 
 
-# 模拟 STATE_KEYS_ORDERED 拼接到 25D 的 sub-key 维度 (A2 hard-freeze)
-# 5 keys: tcp_pose(7) + tcp_vel(6) + tcp_force(3) + tcp_torque(3) + gripper_pose(1) = 20
-# 但 contract STATE_DIMS = 25 (per wrapper.py 注释; arith 矛盾留 VERIFY.md)
-# 此处只验: 拼接顺序 = STATE_KEYS_ORDERED, 总 dim = STATE_DIMS
 def _expected_state_subkeys() -> tuple[str, ...]:
     return STATE_KEYS_ORDERED
 
 
-# CRITICAL (codex #2 fix): 显式 use STATE_KEYS_ORDERED 做 ordered comparison
-# 这是一个 25D vector 的"协议标记": 它必须按 STATE_KEYS_ORDERED 顺序拼接
-# 实现: 用 OrderedDict 等价的 1D vector comparison — 拆 25D 成 STATE_KEYS_ORDERED 子段
-# 验证 (a) shape = (STATE_DIMS,); (b) dtype = STATE_DTYPE;
-#      (c) 各子段维度之和 = STATE_DIMS; (d) STATE_KEYS_ORDERED 长度 = 5
-# 注: 各子段维度的具体数值 (7+6+3+3+1=20) 与 STATE_DIMS=25 的 arith 矛盾
-# 保留在 contract.py docstring + VERIFY.md A2 段, 此处只验"拼接顺序"语义层。
-_EXPECTED_SUBKEY_COUNT = 5  # tcp_pose, tcp_vel, tcp_force, tcp_torque, gripper_pose
+_EXPECTED_SUBKEY_COUNT = 5  # gripper_pose, tcp_force, tcp_pose, tcp_torque, tcp_vel
 
 
 def verify_state_keys_order(
@@ -51,7 +40,7 @@ def verify_state_keys_order(
 ) -> bool:
     """验证 state_vector 拼接顺序与 STATE_KEYS_ORDERED 一致.
 
-    A10 contract (codex #2 fix): state 必须是 STATE_KEYS_ORDERED 顺序拼接的 1D vector.
+    A10/T3 contract: state 必须是 live STATE_KEYS_ORDERED 顺序拼接的 1D vector.
 
     本函数分两层验证:
       (a) shape = (STATE_DIMS,)
@@ -59,7 +48,7 @@ def verify_state_keys_order(
       (c) STATE_KEYS_ORDERED 长度 = _EXPECTED_SUBKEY_COUNT (5 个 sub-key)
       (d) 所有 sub-key 名称非空
       (e) contract layout 自洽: len(STATE_KEY_DIMS) == len(STATE_KEYS_ORDERED)
-          且 sum(STATE_KEY_DIMS) == STATE_DIMS (拼接边界 must reconstruct 25D)
+          且 sum(STATE_KEY_DIMS) == STATE_DIMS (拼接边界 must reconstruct 19D)
 
     当调用方提供 ``segments`` (producer 的 slice layout, 即 key -> sub-array
     映射) 时, 额外做"真顺序"校验 (codex #2 的本意):
@@ -70,8 +59,7 @@ def verify_state_keys_order(
     任何一项不满足返回 False —— 因此一个 reordered state (子块换位) 会被捕获,
     而非旧实现里的静默 pass。
 
-    Arith 矛盾 (20 vs 25) 保留在 contract.py docstring 与 VERIFY.md A2 段;
-    flat 路径不参与 arith 校验, 只验 schema/layout 自洽。
+    Flat 路径只验 schema/layout 自洽；producer 可额外传 segments 做真顺序校验。
     """
     # (a) shape check
     if state_vector.shape != (STATE_DIMS,):
@@ -79,7 +67,7 @@ def verify_state_keys_order(
     # (b) dtype check
     if state_vector.dtype != np.dtype(STATE_DTYPE):
         return False
-    # (c) STATE_KEYS_ORDERED 长度 check (实 ordered 拼接到 25D 应有 5 个 sub-key)
+    # (c) STATE_KEYS_ORDERED 长度 check (live state has 5 sub-keys)
     if len(STATE_KEYS_ORDERED) != _EXPECTED_SUBKEY_COUNT:
         return False
     # (d) 验证所有 sub-key 名称都不为空 (即不是空 tuple / 空 string)

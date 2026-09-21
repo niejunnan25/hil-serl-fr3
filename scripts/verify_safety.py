@@ -22,6 +22,7 @@ Exit code 0 = all critical checks pass, 1 = at least one critical failure.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import sys
@@ -52,11 +53,62 @@ GELLO_NUM_FRAMES = 100        # frames to read for calibration
 # FR3 joint limits (from record_gello_demos.py)
 from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS
 
-# Cartesian safety box (FR3 typical workspace)
-# These define a conservative bounding box for the end-effector.
-# [x_min, y_min, z_min] to [x_max, y_max, z_max] in meters (base frame).
-CARTESIAN_SAFETY_BOX_LOW = np.array([0.20, -0.50, 0.05])
-CARTESIAN_SAFETY_BOX_HIGH = np.array([0.80, 0.50, 0.70])
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+PLUG_CONFIG_PATH = os.path.join(PROJECT_ROOT, "experiments", "plug_insertion", "config.py")
+
+
+def _load_live_env_config_constants() -> dict[str, Any]:
+    """Read EnvConfig constants without importing the heavy JAX/SERL runtime."""
+    with open(PLUG_CONFIG_PATH, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=PLUG_CONFIG_PATH)
+
+    wanted = {
+        "ABS_POSE_LIMIT_LOW",
+        "ABS_POSE_LIMIT_HIGH",
+        "COMPLIANCE_PARAM",
+        "PRECISION_PARAM",
+    }
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "EnvConfig":
+            values: dict[str, Any] = {}
+            for item in node.body:
+                if not isinstance(item, ast.Assign):
+                    continue
+                for target in item.targets:
+                    if isinstance(target, ast.Name) and target.id in wanted:
+                        expr = ast.Expression(item.value)
+                        ast.fix_missing_locations(expr)
+                        values[target.id] = eval(
+                            compile(expr, PLUG_CONFIG_PATH, "eval"),
+                            {"__builtins__": {}, "np": np},
+                            {},
+                        )
+            missing = wanted - values.keys()
+            if missing:
+                raise RuntimeError(f"EnvConfig missing constants: {sorted(missing)}")
+            return values
+    raise RuntimeError("EnvConfig class not found")
+
+
+try:
+    _LIVE_ENV_CONFIG = _load_live_env_config_constants()
+    _LIVE_ENV_CONFIG_ERROR = None
+except Exception as e:
+    _LIVE_ENV_CONFIG = {}
+    _LIVE_ENV_CONFIG_ERROR = str(e)
+
+
+if _LIVE_ENV_CONFIG_ERROR is None:
+    CARTESIAN_SAFETY_BOX_LOW = np.asarray(_LIVE_ENV_CONFIG["ABS_POSE_LIMIT_LOW"], dtype=np.float64)[:3]
+    CARTESIAN_SAFETY_BOX_HIGH = np.asarray(_LIVE_ENV_CONFIG["ABS_POSE_LIMIT_HIGH"], dtype=np.float64)[:3]
+    COMPLIANCE_PARAM: dict[str, float] = dict(_LIVE_ENV_CONFIG["COMPLIANCE_PARAM"])
+    PRECISION_PARAM: dict[str, float] = dict(_LIVE_ENV_CONFIG["PRECISION_PARAM"])
+else:
+    # Fail-closed fallback for import-time diagnostics; integration check reports the error.
+    CARTESIAN_SAFETY_BOX_LOW = np.array([np.nan, np.nan, np.nan], dtype=np.float64)
+    CARTESIAN_SAFETY_BOX_HIGH = np.array([np.nan, np.nan, np.nan], dtype=np.float64)
+    COMPLIANCE_PARAM = {}
+    PRECISION_PARAM = {}
 
 # Impedance parameter bounds (sane ranges for FR3)
 # Format: (key, min_val, max_val, description)
@@ -78,54 +130,6 @@ DEFAULT_SERVER_URL = "http://127.0.0.2:5000/"
 DEFAULT_GELLO_PORT = "/dev/ttyUSB0"
 DEFAULT_GELLO_BAUDRATE = 57600
 TIMEOUT_S = 5.0
-
-# ── preset impedance params ────────────────────────────────────────
-# CANONICAL SOURCE: experiments/plug_insertion/config.py EnvConfig.COMPLIANCE_PARAM /
-# PRECISION_PARAM (the live runtime config the actor pushes to serl_franka_controllers
-# via /update_param). These dicts mirror that config so this safety verifier checks
-# against the ACTUAL operating point. If the live config changes, update these to match.
-
-COMPLIANCE_PARAM: dict[str, float] = {
-    "translational_stiffness": 2000,
-    "translational_damping": 89,
-    "rotational_stiffness": 150,
-    "rotational_damping": 7,
-    "translational_Ki": 0,
-    "translational_clip_x": 0.006,
-    "translational_clip_y": 0.0059,
-    "translational_clip_z": 0.0035,
-    "translational_clip_neg_x": 0.005,
-    "translational_clip_neg_y": 0.005,
-    "translational_clip_neg_z": 0.0035,
-    "rotational_clip_x": 0.05,
-    "rotational_clip_y": 0.05,
-    "rotational_clip_z": 0.05,
-    "rotational_clip_neg_x": 0.05,
-    "rotational_clip_neg_y": 0.05,
-    "rotational_clip_neg_z": 0.05,
-    "rotational_Ki": 0,
-}
-
-PRECISION_PARAM: dict[str, float] = {
-    "translational_stiffness": 2500,
-    "translational_damping": 100,
-    "rotational_stiffness": 200,
-    "rotational_damping": 10,
-    "translational_Ki": 0.0,
-    "translational_clip_x": 0.008,
-    "translational_clip_y": 0.008,
-    "translational_clip_z": 0.0072,
-    "translational_clip_neg_x": 0.008,
-    "translational_clip_neg_y": 0.008,
-    "translational_clip_neg_z": 0.0072,
-    "rotational_clip_x": 0.05,
-    "rotational_clip_y": 0.05,
-    "rotational_clip_z": 0.05,
-    "rotational_clip_neg_x": 0.05,
-    "rotational_clip_neg_y": 0.05,
-    "rotational_clip_neg_z": 0.05,
-    "rotational_Ki": 0.0,
-}
 
 REQUIRED_PARAM_KEYS: set[str] = set(COMPLIANCE_PARAM.keys())
 
@@ -415,8 +419,9 @@ def check_cartesian_safety_box(
     name = "Cartesian safety box"
 
     if dry_run:
-        # Simulate: use a nominal pose
-        pose = np.array([0.45, 0.0, 0.30, 0.0, 0.0, 0.0, 1.0])
+        # Simulate with the center of the live operating box.
+        xyz = (box_low + box_high) / 2.0
+        pose = np.concatenate([xyz, [0.0, 0.0, 0.0, 1.0]])
         details = {
             "pose_xyz": [f"{v:.4f}" for v in pose[:3]],
             "box_low": [f"{v:.4f}" for v in box_low],
@@ -476,7 +481,11 @@ def check_impedance_params(dry_run: bool = False) -> CheckResult:
     """Verify COMPLIANCE_PARAM and PRECISION_PARAM are within sane bounds."""
     name = "Impedance parameters"
     issues: list[str] = []
-    details: dict[str, Any] = {}
+    details: dict[str, Any] = {"config_path": PLUG_CONFIG_PATH}
+
+    if _LIVE_ENV_CONFIG_ERROR is not None:
+        details["config_error"] = _LIVE_ENV_CONFIG_ERROR
+        return CheckResult(name, "fail", "Cannot load live EnvConfig impedance parameters", details)
 
     for params, label in [(COMPLIANCE_PARAM, "COMPLIANCE"), (PRECISION_PARAM, "PRECISION")]:
         # Check required keys
@@ -627,6 +636,21 @@ def check_safety_box_integration(dry_run: bool = False) -> CheckResult:
     # The safety box in this script
     details["script_box_low"] = CARTESIAN_SAFETY_BOX_LOW.tolist()
     details["script_box_high"] = CARTESIAN_SAFETY_BOX_HIGH.tolist()
+    details["config_path"] = PLUG_CONFIG_PATH
+
+    if _LIVE_ENV_CONFIG_ERROR is not None:
+        details["config_error"] = _LIVE_ENV_CONFIG_ERROR
+        return CheckResult(name, "fail", "Cannot load live EnvConfig constants", details)
+
+    env_low = np.asarray(_LIVE_ENV_CONFIG["ABS_POSE_LIMIT_LOW"], dtype=np.float64)[:3]
+    env_high = np.asarray(_LIVE_ENV_CONFIG["ABS_POSE_LIMIT_HIGH"], dtype=np.float64)[:3]
+    details["env_box_low"] = env_low.tolist()
+    details["env_box_high"] = env_high.tolist()
+
+    if not np.allclose(CARTESIAN_SAFETY_BOX_LOW, env_low, atol=1e-12):
+        return CheckResult(name, "fail", "Script safety low bound differs from live EnvConfig", details)
+    if not np.allclose(CARTESIAN_SAFETY_BOX_HIGH, env_high, atol=1e-12):
+        return CheckResult(name, "fail", "Script safety high bound differs from live EnvConfig", details)
 
     # Check: box_low < box_high for all axes
     if not np.all(CARTESIAN_SAFETY_BOX_LOW < CARTESIAN_SAFETY_BOX_HIGH):
@@ -649,7 +673,7 @@ def check_safety_box_integration(dry_run: bool = False) -> CheckResult:
                            f"z_min = {CARTESIAN_SAFETY_BOX_LOW[2]} < 0 (below table)",
                            details)
 
-    # Try to import FrankaEnv and verify clip_safety_box() consistency
+    # Optional import of external FrankaEnv surfaces for additional diagnostics only.
     try:
         # Attempt to find and import FrankaEnv from common locations
         import importlib

@@ -4,7 +4,7 @@
 不是 real data; real pkl + balanced fixture + 真 domain alignment = phase6-ready gate (用户批准)。
 
 输出: SERL pkl with 3 image keys (side_policy + wrist_1 + side_classifier)
-+ 25D float32 state + 7D float32 action + 80% pos_ratio (正样本 reward=1.0).
++ live float32 state + 7D float32 action + 80% pos_ratio (正样本 reward=1.0).
 
 Usage:
   python -m sim.scripts.gen_mock_real_pkl --output /tmp/mock.pkl --num-frames 50 --pos-ratio 0.8
@@ -61,7 +61,7 @@ def generate_mock_real_pkl(
 
     transitions: list[dict] = []
     for i in range(num_frames):
-        # 25D state (gaussian)
+        # live flat state (gaussian)
         state = rng.normal(size=(STATE_DIMS,)).astype(np.float32)
         next_state = rng.normal(size=(STATE_DIMS,)).astype(np.float32)
         # 7D action

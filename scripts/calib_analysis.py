@@ -8,6 +8,12 @@ Computes, for the consistent cluster (drop first-5 + the y-outlier):
   - ABS_POSE_LIMIT box = insertion-segment span + margin
   - seated rel-z relative to insertion-start  -> sets the rel-z reward gate
 Prints per-demo so the cluster + trim points are auditable. READ-ONLY.
+
+Orientation note:
+  STANDARD scipy euler is diagnostic only. The live env commands config euler
+  through franka_env.utils.rotations.euler_2_quat, a project-specific map that
+  is not generally the inverse of scipy/quaternion Euler conversion. Copy
+  CONFIG euler into TARGET_POSE/RESET_POSE, not STANDARD scipy euler.
 """
 import glob
 import os
@@ -15,15 +21,29 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+from scripts.orient_calib import DEFAULT_QUAT_ATOL, invert
+
 HYBRID = "/home/robot/hilserl-fr3/demos/hybrid"
 SEAT_K = 5          # seated = last K frames
 DESCENT_ABOVE = 0.08   # insertion-start = last idx (from end) with z >= seated_z + this
+CONFIG_EULER_ATOL = DEFAULT_QUAT_ATOL
 
 
-def wxyz_to_euler(q_wxyz):
+def wxyz_to_scipy_euler(q_wxyz):
+    """Convert wxyz quaternion to STANDARD scipy xyz Euler for diagnostics only."""
     q = np.asarray(q_wxyz, float)
     q_xyzw = np.array([q[1], q[2], q[3], q[0]])
     return R.from_quat(q_xyzw).as_euler("xyz")
+
+
+def wxyz_to_config_euler(q_wxyz):
+    """Convert wxyz quaternion to config Euler for franka_env euler_2_quat."""
+    q = np.asarray(q_wxyz, float)
+    q_xyzw = np.array([q[1], q[2], q[3], q[0]])
+    euler, check = invert(q_xyzw)
+    if not np.allclose(check, q_xyzw, atol=CONFIG_EULER_ATOL):
+        raise RuntimeError("CONFIG euler inversion failed to round-trip")
+    return euler
 
 
 def insertion_start_idx(x, seated_x, margin=0.05):
@@ -82,11 +102,15 @@ def main():
 
     t_med, t_iqr = stat(seated)
     r_med, r_iqr = stat(ins)
+    target_q = np.median(seated_q, axis=0)
+    reset_q = np.median(ins_q, axis=0)
     print("\n=== CALIBRATION (kept cluster, n=%d) ===" % len(K))
     print("TARGET_POSE xyz  median=%s  IQR=%s" % (np.round(t_med, 4).tolist(), np.round(t_iqr, 4).tolist()))
-    print("TARGET euler(rad) median=%s" % np.round(wxyz_to_euler(np.median(seated_q, axis=0)), 4).tolist())
+    print("TARGET CONFIG euler(rad) median=%s" % np.round(wxyz_to_config_euler(target_q), 5).tolist())
+    print("TARGET STANDARD scipy euler(rad), diagnostics only=%s" % np.round(wxyz_to_scipy_euler(target_q), 5).tolist())
     print("RESET_POSE  xyz  median=%s  IQR=%s" % (np.round(r_med, 4).tolist(), np.round(r_iqr, 4).tolist()))
-    print("RESET euler(rad)  median=%s" % np.round(wxyz_to_euler(np.median(ins_q, axis=0)), 4).tolist())
+    print("RESET CONFIG euler(rad)  median=%s" % np.round(wxyz_to_config_euler(reset_q), 5).tolist())
+    print("RESET STANDARD scipy euler(rad), diagnostics only=%s" % np.round(wxyz_to_scipy_euler(reset_q), 5).tolist())
     print("RESET above seat (z):  %.4f m" % (r_med[2] - t_med[2]))
     print("seated rel-z vs insertion-start (per demo median): %.4f  (-> rel-z reward gate)" %
           np.median(seated[:, 2] - ins[:, 2]))

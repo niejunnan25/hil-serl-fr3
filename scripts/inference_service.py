@@ -41,12 +41,22 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from experiments.plug_insertion.state_layout import tcp_pose_z
+from experiments.plug_insertion.success_gate import (
+    DEFAULT_CLASSIFIER_THRESHOLD,
+    DEFAULT_DEPTH_THRESHOLD,
+    DEFAULT_STREAK_REQUIRED,
+    SuccessStreak,
+    classify_success,
+)
+
 
 # ---------------------------------------------------------------------------
 # 成功判定阈值 (与 config.py / eval_rollout.py 一致)
 # ---------------------------------------------------------------------------
-CLASSIFIER_THRESHOLD = 0.7   # sigmoid output threshold
-Z_HEIGHT_THRESHOLD = 0.22    # plug must be below this z (m)
+CLASSIFIER_THRESHOLD = DEFAULT_CLASSIFIER_THRESHOLD
+Z_HEIGHT_THRESHOLD = DEFAULT_DEPTH_THRESHOLD
+SUCCESS_STREAK_REQUIRED = DEFAULT_STREAK_REQUIRED
 DEFAULT_MAX_STEPS = 150      # matches EnvConfig.MAX_EPISODE_LENGTH
 DEFAULT_NUM_EPISODES = 10
 DEFAULT_SERVER_URL = "http://127.0.0.2:5000/"
@@ -274,6 +284,11 @@ def run_episode(
     total_reward = 0.0
     success = False
     failure_reason = None
+    success_streak = SuccessStreak(
+        required=SUCCESS_STREAK_REQUIRED,
+        classifier_threshold=CLASSIFIER_THRESHOLD,
+        depth_threshold=Z_HEIGHT_THRESHOLD,
+    )
 
     for step in range(max_steps):
         # 策略选择动作
@@ -282,8 +297,8 @@ def run_episode(
         # 环境步进
         next_obs, reward, terminated, truncated, info = env.step(action)
 
-        # 获取 z-height
-        z_height = float(obs["state"][0, 2]) if "state" in obs else 0.0
+        # 获取 z-height from SERLObsWrapper's gymnasium Dict flatten order.
+        z_height = tcp_pose_z(obs["state"]) if "state" in obs else 0.0
 
         # 分类器判定
         classifier_logit = float(classifier_fn(obs))
@@ -302,11 +317,9 @@ def run_episode(
         steps_data.append(step_info)
         total_reward += float(reward)
 
-        # 成功判定: 分类器 > 阈值 AND z 低于阈值
-        if classifier_prob > CLASSIFIER_THRESHOLD and z_height < Z_HEIGHT_THRESHOLD:
-            success = True
-            if step >= 5:  # 最少步数确认
-                break
+        success = success_streak.update(classifier_prob=classifier_prob, depth=z_height)
+        if success:
+            break
 
         # 失败判定
         if terminated and not success:

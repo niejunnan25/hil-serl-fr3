@@ -59,12 +59,12 @@ class FeasibilityReport:
         return "FeasibilityReport: FAIL\n  " + "\n  ".join(str(v) for v in self.violations)
 
 
-# Hard limits from FR3 hardware spec (see franka_hardware_left.yaml in any FR3 deployment) — DO NOT import from real-side; sim port is self-contained per spec §6
 JOINT_POS_UPPER = np.array([2.80, 1.66, 2.80, -0.17, 2.80, 3.65, 2.80], dtype=np.float64)
-JOINT_POS_LOWER = np.array([-2.80, -1.66, -2.80, -2.97, -2.80, 0.08, -2.80], dtype=np.float64)
+JOINT_POS_LOWER = np.array([-2.80, -1.66, -2.80, -2.97, -2.80, 0.5445, -2.80], dtype=np.float64)
 JOINT_VEL_LIMIT = np.array([2.075, 2.075, 2.075, 2.075, 2.51, 2.51, 2.51], dtype=np.float64)
 CART_POS_UPPER = np.array([1.0, 0.4, 1.0], dtype=np.float64)
 CART_POS_LOWER = np.array([0.1, -0.4, -0.05], dtype=np.float64)
+DEFAULT_CONTROL_HZ = 15.0
 
 # Step delta threshold: a single 15Hz control step at max joint vel ≈ 2.5 rad/s
 # would move ~0.17 rad. Allow generous 0.5 rad/step to avoid false positives.
@@ -127,6 +127,44 @@ def check_step_delta(
                 out.append(FeasibilityViolation(
                     ViolationCategory.STEP_DELTA,
                     f"joint{j+1} delta={delta[j]:.4f} > {max_delta}",
+                    timestep=t,
+                ))
+    return out
+
+
+def check_joint_velocity(
+    q_seq: np.ndarray,
+    *,
+    control_hz: float = DEFAULT_CONTROL_HZ,
+    vel_limit: np.ndarray = JOINT_VEL_LIMIT,
+) -> list[FeasibilityViolation]:
+    """q_seq: shape (T, 7). Checks joint velocity against FR3 per-joint limits."""
+    q_arr = np.asarray(q_seq, dtype=np.float64)
+    if q_arr.ndim != 2 or q_arr.shape[-1] != 7:
+        return [FeasibilityViolation(
+            ViolationCategory.CHUNK_SHAPE,
+            f"expected (T, 7), got {q_arr.shape}",
+        )]
+    if control_hz <= 0:
+        return [FeasibilityViolation(
+            ViolationCategory.CHUNK_SHAPE,
+            f"control_hz must be positive, got {control_hz}",
+        )]
+    limits = np.asarray(vel_limit, dtype=np.float64).reshape(-1)
+    if limits.shape != (7,):
+        return [FeasibilityViolation(
+            ViolationCategory.CHUNK_SHAPE,
+            f"expected vel_limit shape (7,), got {limits.shape}",
+        )]
+
+    out: list[FeasibilityViolation] = []
+    for t in range(1, q_arr.shape[0]):
+        velocity = (q_arr[t] - q_arr[t - 1]) * control_hz
+        for j in range(7):
+            if abs(velocity[j]) > limits[j]:
+                out.append(FeasibilityViolation(
+                    ViolationCategory.JOINT_VEL,
+                    f"joint{j+1} velocity={velocity[j]:.4f} > {limits[j]:.4f} rad/s",
                     timestep=t,
                 ))
     return out
@@ -224,6 +262,7 @@ def check_action_chunk(
     ee_pos_seq: np.ndarray | None = None,
     z_floor: float = MIN_CART_Z_DEFAULT,
     max_step_delta: float = DEFAULT_MAX_STEP_DELTA,
+    control_hz: float = DEFAULT_CONTROL_HZ,
     require_close_then_open: bool = False,
     min_close_steps: int = 0,
 ) -> FeasibilityReport:
@@ -243,6 +282,7 @@ def check_action_chunk(
     gripper_seq = arr[:, 7]
     violations: list[FeasibilityViolation] = []
     violations += check_joint_limits(q_seq)
+    violations += check_joint_velocity(q_seq, control_hz=control_hz)
     violations += check_step_delta(q_seq, max_delta=max_step_delta)
     violations += check_gripper_command(gripper_seq)
     violations += check_gripper_phase(
@@ -360,10 +400,11 @@ __all__ = [
     "FeasibilityReport",
     "JOINT_POS_UPPER", "JOINT_POS_LOWER", "JOINT_VEL_LIMIT",
     "CART_POS_UPPER", "CART_POS_LOWER",
-    "DEFAULT_MAX_STEP_DELTA",
+    "DEFAULT_CONTROL_HZ", "DEFAULT_MAX_STEP_DELTA",
     "MIN_CART_Z_DEFAULT", "MIN_CART_Z_GRASP",
     "GRIPPER_CLOSE_THRESHOLD",
     "check_joint_limits",
+    "check_joint_velocity",
     "check_step_delta",
     "check_cart_limits",
     "check_gripper_command",

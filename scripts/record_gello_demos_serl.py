@@ -37,6 +37,7 @@ from datetime import datetime
 
 import numpy as np
 import requests
+from scipy.spatial.transform import Rotation
 
 # FK converter: joint angles -> Cartesian pose (used in live mode)
 import sys as _sys
@@ -56,6 +57,9 @@ DEFAULT_DURATION = 30.0
 DEFAULT_LEADER_SCALE = 0.50
 DEFAULT_OUTPUT_DIR = "/tmp/gello_demos"
 DEFAULT_SERVER_URL = "http://127.0.0.2:5000/"
+DEFAULT_FK_BIAS_LIMIT = 0.005
+DEFAULT_MAX_CARTESIAN_STEP = 0.005
+DEFAULT_MAX_CARTESIAN_ROT_STEP = 0.05
 
 # GELLO -> FR3 关节符号映射 (来自 gello_fr3_desktop_follow.py)
 DEFAULT_JOINT_SIGNS = [1, -1, 1, 1, 1, -1, 1]
@@ -217,6 +221,29 @@ def check_tracking_error(target, actual, max_tracking_error):
     return max_err <= max_tracking_error, max_err, err
 
 
+def check_fk_bias(joints, current_pose, limit=DEFAULT_FK_BIAS_LIMIT):
+    """Return whether legacy FK agrees with the server TCP pose."""
+    fk_pose = forward_kinematics(joints)
+    bias = float(np.linalg.norm(fk_pose[:3] - np.asarray(current_pose, dtype=float)[:3]))
+    return bias <= limit, bias, fk_pose
+
+
+def check_cartesian_pose_step(
+    prev_pose,
+    curr_pose,
+    max_translation=DEFAULT_MAX_CARTESIAN_STEP,
+    max_rotation=DEFAULT_MAX_CARTESIAN_ROT_STEP,
+):
+    """Check a live absolute /pose command step before sending it."""
+    prev_pose = np.asarray(prev_pose, dtype=float).reshape(-1)[:7]
+    curr_pose = np.asarray(curr_pose, dtype=float).reshape(-1)[:7]
+    d_pos = float(np.linalg.norm(curr_pose[:3] - prev_pose[:3]))
+    r_prev = Rotation.from_quat(prev_pose[3:7])
+    r_curr = Rotation.from_quat(curr_pose[3:7])
+    d_rot = float((r_curr * r_prev.inv()).magnitude())
+    return d_pos <= max_translation and d_rot <= max_rotation, d_pos, d_rot
+
+
 # ---------------------------------------------------------------------------
 # 数据保存 — 与原版完全一致
 # ---------------------------------------------------------------------------
@@ -269,6 +296,16 @@ def run_recording(args):
         assert robot is not None
         q0 = np.asarray(robot.get_joint_positions(), dtype=float)
         current_pose = robot.get_current_pose()
+        fk_ok, fk_bias, _fk_q0 = check_fk_bias(q0, current_pose, args.fk_bias_limit)
+        if not fk_ok:
+            print(
+                "[ABORT] FK/EE-frame mismatch before live motion: "
+                f"||FK(q0)-currpos||={fk_bias:.4f}m > {args.fk_bias_limit:.4f}m. "
+                "No /pose command issued."
+            )
+            gello.close()
+            robot.close()
+            return None
     else:
         q0 = raw_gello0 * joint_signs * leader_scale
         q0 = np.clip(q0, FR3_LOWER_LIMITS + 0.02, FR3_UPPER_LIMITS - 0.02)
@@ -323,15 +360,25 @@ def run_recording(args):
             command = command + np.clip(target - command, -args.max_step, args.max_step)
 
             # Live 模式: 读取实际状态并发送位姿命令
-            # target_pose: 由 GELLO 目标关节通过 FK 计算得到的笛卡尔位姿
+            # target_pose: 由平滑后的 command 通过 FK 计算得到的笛卡尔位姿
             actual = command.copy()
             gripper_pos = 0.0
             if is_live:
                 assert robot is not None
                 actual = np.asarray(robot.get_joint_positions(), dtype=float)
                 gripper_pos = robot.get_gripper_pos()
-                # FK: GELLO 目标关节 -> 目标笛卡尔位姿 (7D: x,y,z,qx,qy,qz,qw)
-                target_pose = forward_kinematics(target)
+                # FK: 平滑后的关节 command -> 目标笛卡尔位姿 (7D: x,y,z,qx,qy,qz,qw)
+                target_pose = forward_kinematics(command)
+                cart_ok, cart_step, rot_step = check_cartesian_pose_step(
+                    current_pose,
+                    target_pose,
+                    args.max_cartesian_step,
+                    args.max_cartesian_rot_step,
+                )
+                if not cart_ok:
+                    abort_reason = f"max_cartesian_step:{cart_step:.4f}/rot:{rot_step:.4f}"
+                    print(f"[ABORT] Step {step}: {abort_reason}")
+                    break
                 robot.send_pose_command(target_pose)
                 current_pose = target_pose.copy()
             else:
@@ -427,6 +474,9 @@ def main():
     parser.add_argument("--max-step", type=float, default=DEFAULT_MAX_STEP)
     parser.add_argument("--max-total-delta", type=float, default=DEFAULT_MAX_TOTAL_DELTA)
     parser.add_argument("--max-tracking-error", type=float, default=DEFAULT_MAX_TRACKING_ERROR)
+    parser.add_argument("--fk-bias-limit", type=float, default=DEFAULT_FK_BIAS_LIMIT)
+    parser.add_argument("--max-cartesian-step", type=float, default=DEFAULT_MAX_CARTESIAN_STEP)
+    parser.add_argument("--max-cartesian-rot-step", type=float, default=DEFAULT_MAX_CARTESIAN_ROT_STEP)
     args = parser.parse_args()
     args.joint_signs = [int(s) for s in args.joint_signs.split(",")]
     filepath = run_recording(args)

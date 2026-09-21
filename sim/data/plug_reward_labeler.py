@@ -49,6 +49,7 @@ ANGLE_TOLERANCE_RAD = math.radians(ANGLE_TOLERANCE_DEG)
 # 如果不同场景, 通过 CLI --socket-pos/--socket-rot 参数覆盖
 DEFAULT_SOCKET_POS = np.array([0.12, 0.0, 0.74])  # (x, y, z) world frame
 DEFAULT_SOCKET_QUAT = np.array([1.0, 0.0, 0.0, 0.0])  # (w, x, y, z) identity
+DEFAULT_ROBOT_BASE_POS_WORLD = np.array([0.0, 0.0, 0.74])  # plug_scene TABLE_HEIGHT
 
 
 # ===========================================================================
@@ -87,6 +88,20 @@ def quat_angle(q: np.ndarray) -> float:
 def quat_relative(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
     """q1 相对于 q2 的旋转: delta = conj(q2) * q1."""
     return quat_multiply(quat_conjugate(q2), q1)
+
+
+def euler_xyz_to_quat_wxyz(euler_xyz: np.ndarray) -> np.ndarray:
+    """Convert Euler xyz angles to scalar-first quaternion [w,x,y,z]."""
+    x, y, z = np.asarray(euler_xyz, dtype=np.float64)
+    cx, sx = math.cos(x / 2.0), math.sin(x / 2.0)
+    cy, sy = math.cos(y / 2.0), math.sin(y / 2.0)
+    cz, sz = math.cos(z / 2.0), math.sin(z / 2.0)
+    return np.array([
+        cx * cy * cz + sx * sy * sz,
+        sx * cy * cz - cx * sy * sz,
+        cx * sy * cz + sx * cy * sz,
+        cx * cy * sz - sx * sy * cz,
+    ], dtype=np.float64)
 
 
 # ===========================================================================
@@ -205,27 +220,28 @@ def estimate_tcp_from_state(
     state: np.ndarray,
     socket_pos: np.ndarray,
     socket_quat: np.ndarray,
+    robot_base_pos_world: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """从 obs state 估计 TCP 位姿.
 
-    state = [7 joints, 1 gripper]
-    使用 sim 内记录的关节位置, 简化为 EE 到插座的相对估计。
-    当 sim 中无直接 EE pose 记录时, 使用 state 的前 7 个关节值
-    作为估计 (实际 EE pose 需要 FK, 这里用简化方式)。
+    gello_replay emits live SERL19 flat state:
+      gripper(1), force(3), tcp_pose(6 pos_base+euler_xyz), torque(3), vel(6)
 
-    注: 如果 gello_replay.py 记录了完整 EE pose, 应直接使用。
+    tcp_pose position is in the robot base frame. plug_scene places the FR3
+    base at world z=TABLE_HEIGHT, so convert to world frame before comparing
+    against the world-frame socket pose.
     """
-    # state 由 gello_replay.capture_observation 产出, 25D, 按
-    # contract.STATE_KEYS_ORDERED 拼接: tcp_pose(7)=pos(3)+quat_xyzw(4),
-    # 之后是 tcp_vel(6)/tcp_force(3)/tcp_torque(3)/gripper_pose(6)。
-    # 因此 state[0:3] 直接就是 world-frame TCP 位置, 不需要 FK 近似。
     state = np.asarray(state, dtype=np.float64)
-    tcp_pos = state[0:3].copy()
-    # tcp_quat: state[3:7] 由 gello_replay 以 xyzw (scalar-last) 写入,
-    # 而 check_insertion 约定 [w,x,y,z] (scalar-first), 转换 convention 后返回,
-    # 使角度对齐判定基于真实 TCP 朝向而非 identity 占位。
-    qx, qy, qz, qw = state[3:7]
-    tcp_quat = np.array([qw, qx, qy, qz], dtype=np.float64)
+    if state.shape != (19,):
+        raise ValueError(f"expected live SERL19 state shape (19,), got {state.shape}")
+    base_pos = (
+        np.asarray(robot_base_pos_world, dtype=np.float64)
+        if robot_base_pos_world is not None
+        else DEFAULT_ROBOT_BASE_POS_WORLD
+    )
+    tcp_pos_base = state[4:7].copy()
+    tcp_pos = base_pos + tcp_pos_base
+    tcp_quat = euler_xyz_to_quat_wxyz(state[7:10])
     return tcp_pos, tcp_quat
 
 

@@ -5,10 +5,11 @@ FR3 (Franka Emika) Forward Kinematics converter.
 
 Converts joint-space trajectories to Cartesian-space deltas using
 DH-parameter-based FK with scipy.spatial.transform.Rotation for
-proper quaternion/rotation handling and singularity-safe Euler deltas.
+proper quaternion/rotation handling and SERL-compatible rotvec deltas.
 
 The FR3 kinematic chain is identical to the Panda (7 revolute joints).
-DH parameters are taken from the Franka Emika documentation / URDF.
+DH parameters are taken from the Franka Emika documentation / URDF and use
+the modified/Craig convention.
 
 Usage:
     from fk_converter import joints_to_cartesian_delta, forward_kinematics
@@ -16,7 +17,7 @@ Usage:
     # Single frame FK -> [x, y, z, qx, qy, qz, qw]
     pose = forward_kinematics(q)
 
-    # Cartesian delta between two joint states -> [dx, dy, dz, droll, dpitch, dyaw]
+    # Cartesian delta between two joint states -> [dx, dy, dz, rx, ry, rz]
     delta = joints_to_cartesian_delta(q_prev, q_curr)
 """
 
@@ -24,55 +25,57 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 # ---------------------------------------------------------------------------
-# FR3 DH Parameters (standard DH convention)
-# Source: Franka Emika Panda URDF
+# FR3 DH Parameters (modified/Craig DH convention)
+# Source: franka_description FR3 kinematics.yaml / official Franka docs
 #
-# Joint | a (m)      | alpha (rad)       | d (m)     | theta_offset (rad)
+# Joint | a_{i-1} (m) | d_i (m)  | alpha_{i-1} (rad) | theta_offset (rad)
 # ------|------------|-------------------|-----------|--------------------
-#  1    | 0          | 0                 | 0.333     | 0
-#  2    | 0          | -pi/2             | 0         | 0
-#  3    | 0          | pi/2              | 0.316     | 0
-#  4    | 0.0825     | pi/2              | 0         | 0
-#  5    | -0.0825    | -pi/2             | 0.384     | 0
-#  6    | 0          | pi/2              | 0         | 0
-#  7    | 0.088      | pi/2              | 0         | 0
-# EE   | 0          | 0                 | 0.1034    | pi/4  (flange+gripper)
+#  1    | 0            | 0.333    | 0                 | 0
+#  2    | 0            | 0        | -pi/2             | 0
+#  3    | 0            | 0.316    | pi/2              | 0
+#  4    | 0.0825       | 0        | pi/2              | 0
+#  5    | -0.0825      | 0.384    | -pi/2             | 0
+#  6    | 0            | 0        | pi/2              | 0
+#  7    | 0.088        | 0        | pi/2              | 0
+# Flange | 0          | 0.107    | 0                 | 0
+# TCP    | 0          | 0.1034   | 0                 | -pi/4  (Franka hand F_T_EE)
 # ---------------------------------------------------------------------------
 
 _N_JOINTS = 7
 
-# DH parameters per joint: [a, alpha, d, theta_offset]
+# Modified DH parameters per joint: [a_{i-1}, d_i, alpha_{i-1}, theta_offset]
 _FR3_DH = np.array([
-    [0.0,      0.0,        0.333,   0.0],
-    [0.0,     -np.pi / 2,  0.0,     0.0],
-    [0.0,      np.pi / 2,  0.316,   0.0],
-    [0.0825,   np.pi / 2,  0.0,     0.0],
-   [-0.0825,  -np.pi / 2,  0.384,   0.0],
-    [0.0,      np.pi / 2,  0.0,     0.0],
-    [0.088,    np.pi / 2,  0.0,     0.0],
+    [0.0,      0.333,   0.0,        0.0],
+    [0.0,      0.0,    -np.pi / 2,  0.0],
+    [0.0,      0.316,   np.pi / 2,  0.0],
+    [0.0825,   0.0,     np.pi / 2,  0.0],
+   [-0.0825,   0.384,  -np.pi / 2,  0.0],
+    [0.0,      0.0,     np.pi / 2,  0.0],
+    [0.088,    0.0,     np.pi / 2,  0.0],
 ], dtype=np.float64)
 
-# EE flange offset (panda_hand_joint): d=0.1034 along z, rotation pi/4 about z
-_EE_D = 0.1034
-_EE_ROT_OFFSET = np.pi / 4
+# Fixed transform from joint 7 frame to link8 flange, then Franka-hand TCP.
+_FLANGE_D = 0.107
+_TCP_D = 0.1034
+_TCP_RZ = -np.pi / 4
 
 
 def _dh_transform(a: float, alpha: float, d: float, theta: float) -> np.ndarray:
     """Compute the 4x4 homogeneous transformation matrix from DH parameters.
 
-    Standard DH convention:
-        T = Rz(theta) * Tz(d) * Tx(a) * Rx(alpha)
+    Modified/Craig DH convention:
+        T = Rx(alpha_{i-1}) * Tx(a_{i-1}) * Rz(theta_i) * Tz(d_i)
     """
-    ct = np.cos(theta)
-    st = np.sin(theta)
     ca = np.cos(alpha)
     sa = np.sin(alpha)
+    ct = np.cos(theta)
+    st = np.sin(theta)
 
     return np.array([
-        [ct, -st * ca,  st * sa, a * ct],
-        [st,  ct * ca, -ct * sa, a * st],
-        [0.0, sa,       ca,      d     ],
-        [0.0, 0.0,      0.0,     1.0   ],
+        [ct,      -st,      0.0,    a],
+        [st * ca,  ct * ca, -sa,   -sa * d],
+        [st * sa,  ct * sa,  ca,    ca * d],
+        [0.0,      0.0,      0.0,   1.0],
     ], dtype=np.float64)
 
 
@@ -93,20 +96,23 @@ def forward_kinematics(q: np.ndarray) -> np.ndarray:
     # Build cumulative transform through the kinematic chain
     T = np.eye(4, dtype=np.float64)
     for i in range(_N_JOINTS):
-        a_i, alpha_i, d_i, offset_i = _FR3_DH[i]
+        a_i, d_i, alpha_i, offset_i = _FR3_DH[i]
         theta_i = q[i] + offset_i
         T = T @ _dh_transform(a_i, alpha_i, d_i, theta_i)
 
-    # Apply EE flange offset: rotate by pi/4 about z, then translate along z
-    c45 = np.cos(_EE_ROT_OFFSET)
-    s45 = np.sin(_EE_ROT_OFFSET)
-    T_ee = np.array([
+    flange = np.eye(4, dtype=np.float64)
+    flange[2, 3] = _FLANGE_D
+    T = T @ flange
+
+    c45 = np.cos(_TCP_RZ)
+    s45 = np.sin(_TCP_RZ)
+    T_tcp = np.array([
         [c45, -s45, 0.0, 0.0],
         [s45,  c45, 0.0, 0.0],
-        [0.0,  0.0, 1.0, _EE_D],
+        [0.0,  0.0, 1.0, _TCP_D],
         [0.0,  0.0, 0.0, 1.0],
     ], dtype=np.float64)
-    T = T @ T_ee
+    T = T @ T_tcp
 
     # Extract position
     position = T[:3, 3]
@@ -125,16 +131,16 @@ def joints_to_cartesian_delta(
     """Compute Cartesian-space delta between two joint configurations.
 
     Uses scipy Rotation for robust rotation delta computation.
-    Returns Euler angle deltas with singularity handling (XYZ intrinsic).
+    Returns rotation-vector deltas, matching SERL/franka_env action semantics.
 
     Args:
         q_prev: Previous joint angles (7,) in radians.
         q_curr: Current joint angles (7,) in radians.
 
     Returns:
-        delta: (6,) array [dx, dy, dz, droll, dpitch, dyaw]
+        delta: (6,) array [dx, dy, dz, rx, ry, rz]
                - translation delta in meters
-               - orientation delta as Euler angles (XYZ intrinsic) in radians
+               - orientation delta as an axis-angle rotation vector in radians
     """
     q_prev = np.asarray(q_prev, dtype=np.float64).flatten()
     q_curr = np.asarray(q_curr, dtype=np.float64).flatten()
@@ -156,15 +162,9 @@ def joints_to_cartesian_delta(
     # scipy handles the composition; result is well-defined
     R_delta = R_curr * R_prev.inv()
 
-    # Convert rotation delta to Euler angles (XYZ intrinsic)
-    # This convention is standard for robotics end-effector orientation deltas.
-    # Singularity handling: scipy uses sequential axis decomposition which
-    # handles gimbal lock gracefully -- at pitch = +/- pi/2 the yaw/roll
-    # axes become degenerate and scipy redistributes the angle between them,
-    # avoiding discontinuities.
-    d_euler = R_delta.as_euler('XYZ', degrees=False)
+    d_rotvec = R_delta.as_rotvec()
 
-    return np.concatenate([d_pos, d_euler]).astype(np.float64)
+    return np.concatenate([d_pos, d_rotvec]).astype(np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ def trajectory_to_cartesian_deltas(q_trajectory: np.ndarray) -> np.ndarray:
         q_trajectory: (N, 7) joint angles in radians.
 
     Returns:
-        deltas: (N, 6) [dx, dy, dz, droll, dpitch, dyaw]
+        deltas: (N, 6) [dx, dy, dz, rx, ry, rz]
                 deltas[0] = [0, 0, 0, 0, 0, 0]
     """
     q_trajectory = np.asarray(q_trajectory, dtype=np.float64)
@@ -222,10 +222,8 @@ if __name__ == "__main__":
     print(f"  position : {pose_home[:3]}")
     print(f"  quaternion: {pose_home[3:7]}")
 
-    # Home pose (all zeros) for the standard DH convention:
-    # After joint 2's alpha=-pi/2, the kinematic chain folds such that
-    # subsequent d values contribute to different world axes.
-    # Verified output: position ~ [0.088, -0.068, 0.2296]
+    # Home TCP pose for the modified/Craig DH convention:
+    # position ~ [0.088, 0.0, 0.8226].
     # Quaternion must always be unit norm.
     quat_home = pose_home[3:7]
     quat_norm = np.linalg.norm(quat_home)
@@ -241,7 +239,7 @@ if __name__ == "__main__":
     q2[0] = 0.01  # small rotation on joint 1
     delta = joints_to_cartesian_delta(q_home, q2)
     print(f"\n[Test 2] Delta from joint 1 +0.01 rad:")
-    print(f"  [dx, dy, dz, droll, dpitch, dyaw] = {delta}")
+    print(f"  [dx, dy, dz, rx, ry, rz] = {delta}")
     delta_norm = np.linalg.norm(delta)
     print(f"  ||delta|| = {delta_norm:.6f}")
     assert delta_norm < 0.5, f"Delta should be small for small joint change, got {delta_norm}"

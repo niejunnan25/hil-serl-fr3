@@ -1,242 +1,208 @@
-"""P2-T7 (v2.2.1-A1) — XboxIntervention wrapper.
+"""xbox_intervention.py — HIL-SERL human takeover via Xbox controller.
 
-Drop-in replacement for ``GelloIntervention`` / ``SpacemouseIntervention``:
-same ``gym.ActionWrapper`` interface, same ``action(action)->(action, replaced)``
-signature, same ``info["intervene_action"]`` annotation. Reads the Xbox
-state from a ``TeleopDeviceHub`` instance so the wrapper has zero direct
-dependency on pygame.
+Drop-in replacement for GelloIntervention with the SAME contract:
+  action(self, policy_action) -> (chosen_action, is_intervening)
+  step(self, action) -> (obs, rew, done, truncated, info) with info["intervene_action"]
+                        set whenever the human action replaced the policy action.
 
-Intervention condition (DECISIONS.md #5/6):
-    * **RB must be held (deadman)** — the deadman gate, never raw stick
-      deflection. This is the operator's explicit "I am in control"
-      signal. RB held but sticks centered -> zero action but still
-      considered intervening (so info/intervene_action reflect the
-      takeover).
+Takeover trigger = RB dead-man (hold RB to take over; release -> policy resumes),
+matching the demo-collection convention. While RB is held the human drives with the
+same tuned mapping as hybrid_teleop:
+  left stick  -> X/Y (fwd-back / left-right)
+  right stick up/down -> Z
+  X/B and D-pad rotation are locked by default for insert-only actor training.
+  A (with RB) -> straight-down insertion push (+ optional spiral search)
+  RT/LT       -> gripper (IGNORED here: hold-grip forces gripper closed downstream)
 
-Mapping (constants centralised so A3 record_hybrid_demos can import
-the same numbers — single source of truth):
-    * left  stick x/y -> dx, dy
-    * right stick y  -> dz
-    * right stick x  -> dyaw
-    * d-pad          -> dpitch, droll
-    * RT / LT        -> gripper close / open  (already in [0,1])
-    * Y button       -> scale toggle: fine (default) / coarse
-    * deadzone       -> 0.15 on stick axes (raw)
-    * all output     -> clip to [-1, 1]^7
-
-6D env (no gripper channel) -> gripper_enabled=False, RT/LT ignored.
-
-Safety semantics:
-    * max_step=0.003 m per-step translation cap is enforced *inside* this
-      wrapper (REVIEW I1). The de-normalized translation
-      ||action[:3] * pos_scale|| is clamped to <= max_step so the 3mm/step
-      invariant cannot be bypassed via the Xbox path, independent of any
-      downstream env clamp. Direction is preserved (uniform scaling of the
-      [dx, dy, dz] triple). Rotation and gripper channels are NOT clamped
-      here — rotational/total-delta limits remain owned by the action
-      policy stack (the HIL-SERL env).
+Reuses teleop_hub.TeleopDeviceHub (pygame Xbox reader) + normalize_action from the
+teleop repo. Gripper component is left at 0.0 (no-op) because a downstream hold-grip
+override keeps the plug clamped regardless (avoids the demo/env gripper-sign mismatch).
 """
-
 from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
-import gymnasium as gym
 import numpy as np
+import gymnasium as gym
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+# teleop repo holds the tuned Xbox reader (teleop_hub, pygame backend)
+_TELEOP_SCRIPTS = os.environ.get("TELEOP_SCRIPTS", os.path.dirname(__file__))
+if _TELEOP_SCRIPTS not in sys.path:
+    sys.path.insert(0, _TELEOP_SCRIPTS)
 
-from teleop_hub import TeleopDeviceHub, XboxState
+# inlined from gello_demo_recorder (avoid that module's heavy import chain)
+ACTION_SCALE = np.array([0.015, 0.015, 0.015, 0.1, 0.1, 0.1, 1.0], dtype=float)
 
-# ---------------------------------------------------------------------------
-# Mapping constants — single source of truth (A3 imports these).
-# ---------------------------------------------------------------------------
-DEADZONE = 0.15          # raw stick axis below this -> 0
-SCALE_FINE = 0.3         # default; fine-scale for precision tasks
-SCALE_COARSE = 1.0       # Y toggles to coarse; full range
-DX_IDX, DY_IDX, DZ_IDX = 0, 1, 2
-DROLL_IDX, DPITCH_IDX, DYAW_IDX = 3, 4, 5
-GRIPPER_IDX = 6
 
-# Channel count: 7D (with gripper) or 6D (without).
-FULL_ACTION_DIM = 7
-GRIPPERLESS_ACTION_DIM = 6
+def normalize_action(dxyz, drotvec, gripper_action, action_scale=ACTION_SCALE):
+    """Cartesian delta + gripper -> normalized 7D action in [-1, 1] (float32)."""
+    action_scale = np.asarray(action_scale, dtype=float)
+    a = np.empty(7, dtype=float)
+    a[:3] = np.asarray(dxyz, dtype=float).reshape(-1)[:3] / action_scale[:3]
+    a[3:6] = np.asarray(drotvec, dtype=float).reshape(-1)[:3] / action_scale[3]   # FIX 2026-06-16b: rot scale = action_scale[3]=0.1 (matched in franka_env.step)
+    a[6] = float(gripper_action)
+    return np.clip(a, -1.0, 1.0).astype(np.float32)
+
+# --- mapping constants (mirror hybrid_teleop, but bounded for online training) ---
+XBOX_DZ = 0.08             # stick deadzone (ignore rest drift)
+XBOX_ROT_STEP = 0.030      # rad/tick for D-pad roll/pitch + B/X yaw
+XBOX_MAX_STEP = 0.010      # m/tick translation at full stick before env norm clamp
+XBOX_INSERT_REACH = 0.005  # m straight-down push while A held
+XBOX_SPIRAL_R = 0.003     # m max spiral radius while A held
+XBOX_SPIRAL_RATE = 0.001  # m/s spiral growth
+XBOX_SPIRAL_W = 2.0 * np.pi * 0.7  # rad/s spiral angular speed
+XBOX_LOCK_ROTATION = os.environ.get("XBOX_LOCK_ROTATION", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+_HOLD_SECONDS = 0.4       # keep intervening this long after RB release (debounce)
+
+
+def _dz(v: float) -> float:
+    return 0.0 if abs(v) < XBOX_DZ else float(v)
 
 
 class XboxIntervention(gym.ActionWrapper):
-    """RB-deadman Xbox intervention wrapper.
+    """Xbox-only human intervention wrapper (RB dead-man)."""
 
-    Parameters
-    ----------
-    env : gym.Env
-        The environment to wrap.
-    hub : TeleopDeviceHub
-        State source. Pass a mock-backend hub from tests.
-    scale : float
-        Initial stick-to-action gain (default ``SCALE_FINE``).
-    deadzone : float
-        Stick deadzone (default ``DEADZONE``).
-    action_indices : np.ndarray, optional
-        Subset of the policy action that the Xbox expert controls. When
-        ``None`` (default), the expert overwrites the full vector.
-    """
-
-    def __init__(
-        self,
-        env: gym.Env,
-        hub: TeleopDeviceHub,
-        scale: float = SCALE_FINE,
-        deadzone: float = DEADZONE,
-        action_indices: Optional[np.ndarray] = None,
-        max_step: float = 0.003,
-        pos_scale: float = 0.1,
-        rt_threshold: float = 0.05,
-        lt_threshold: float = 0.05,
-    ):
+    def __init__(self, env, gripper_action_value: float = 0.0):
         super().__init__(env)
-        self.hub = hub
-        self.scale = float(scale)
-        self.deadzone = float(deadzone)
-        self.action_indices = action_indices
-        # RT/LT gripper trigger thresholds (B2a-calibratable; default 0.05).
-        self.rt_threshold = float(rt_threshold)
-        self.lt_threshold = float(lt_threshold)
-        # I1: enforce the per-step translation cap *inside* the teleop
-        # toolchain so the 3mm/step invariant cannot be bypassed via the
-        # Xbox path, regardless of whether the downstream env clamps.
-        # ``pos_scale`` is the env's normalized->metres gain (env pos_scale)
-        # and ``max_step`` is the metres-per-step ceiling.
-        self.max_step = float(max_step)
-        self.pos_scale = float(pos_scale)
+        self.gripper_value = float(gripper_action_value)  # hold-grip: no-op (kept closed downstream)
+        self._hub = None
+        self._warned = False
+        self._armed = False   # 开局冻结: 首次按 RB 才解锁策略
+        self._last_intervene_t = -1e9
+        self._insert_ticks = 0
+        self._spiral_px = 0.0
+        self._spiral_py = 0.0
+        self._dt = 0.1  # actor control period (s); only used for the spiral clock
 
-        # Gripper detection: matches GelloIntervention / Spacemouse.
-        self.gripper_enabled = self.action_space.shape == (FULL_ACTION_DIM,)
-
-        # Last observed state (exposed for tests / recorders).
-        self.last_state: XboxState = XboxState()
-        # Track scale flips so A3 can record ``xbox_scale_mode``.
-        self.scale_mode: str = "fine" if scale == SCALE_FINE else "coarse"
-
-    @classmethod
-    def from_calibration(cls, env, hub, calibration: dict, **kwargs):
-        """Build a wrapper from a B2a calibration profile (xbox_calibrate.py:
-        load_calibration). Maps deadzone + RT/LT thresholds from the profile;
-        any other constructor kwarg (scale, max_step, pos_scale, action_indices)
-        may be passed through and overrides the profile."""
-        params = dict(
-            deadzone=calibration["deadzone"],
-            rt_threshold=calibration["rt_threshold"],
-            lt_threshold=calibration["lt_threshold"],
-        )
-        params.update(kwargs)  # explicit kwargs win
-        return cls(env, hub, **params)
-
-    # ------------------------------------------------------------------
-    # Mapping helpers (tested directly via the suite)
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _apply_deadzone(value: float, deadzone: float) -> float:
-        if abs(value) < deadzone:
-            return 0.0
-        # Rescale so the deadzone boundary maps to 0, not the original
-        # value (otherwise the action jitters near the boundary).
-        sign = 1.0 if value > 0 else -1.0
-        return sign * (abs(value) - deadzone) / (1.0 - deadzone)
-
-    def _state_to_action(self, s: XboxState) -> np.ndarray:
-        """Map XboxState -> 7D action in [-1, 1]^7.
-
-        The wrapper is agnostic to whether the env is 6D or 7D; the
-        action() / step() path trims to the env's action space below.
-        """
-        # raw axes are already in [-1, 1]; apply deadzone then scale.
-        left_x = self._apply_deadzone(s.left_x, self.deadzone)
-        left_y = self._apply_deadzone(s.left_y, self.deadzone)
-        right_x = self._apply_deadzone(s.right_x, self.deadzone)
-        right_y = self._apply_deadzone(s.right_y, self.deadzone)
-        dpad_x = self._apply_deadzone(s.dpad_x, self.deadzone)
-        dpad_y = self._apply_deadzone(s.dpad_y, self.deadzone)
-
-        action = np.zeros(FULL_ACTION_DIM, dtype=np.float32)
-        action[DX_IDX] = left_x * self.scale
-        action[DY_IDX] = left_y * self.scale
-        action[DZ_IDX] = -right_y * self.scale   # right stick up -> +dz feels right
-        action[DYAW_IDX] = right_x * self.scale
-        action[DPITCH_IDX] = -dpad_y * self.scale
-        action[DROLL_IDX] = dpad_x * self.scale
-
-        # Gripper: RT (close) wins over LT (open) when both held. Thresholds
-        # are B2a-calibratable (default 0.05) so a resting/biased trigger does
-        # not register a phantom grip.
-        if self.gripper_enabled:
-            if s.rt > self.rt_threshold:
-                action[GRIPPER_IDX] = 1.0
-            elif s.lt > self.lt_threshold:
-                action[GRIPPER_IDX] = -1.0
+    def _ensure_hub(self):
+        if self._hub is None:
+            from teleop_hub import TeleopDeviceHub
+            self._hub = TeleopDeviceHub(backend="pygame")
+            if not getattr(self._hub, "available", False):
+                raise RuntimeError("Xbox controller unavailable; Actor cannot start")
             else:
-                action[GRIPPER_IDX] = 0.0
+                print("[XboxIntervention] Xbox hub ready (RB dead-man takeover armed).", flush=True)
 
-        action = np.clip(action, -1.0, 1.0)
+    def wait_for_ready(self, operator, recorder):
+        if self._armed:
+            return
+        self._ensure_hub()
+        operator.publish("waiting_controller", prompt="按住 Xbox RB，准备开始。等待期间持续录像。")
+        while not self._armed:
+            recorder.check()
+            operator.raise_if_stop()
+            state = self._hub.poll()
+            if bool(getattr(state, "rb", False)):
+                self._armed = True
+                self._last_intervene_t = time.time()
+                return
+            time.sleep(0.05)
 
-        # I1: cap the per-step *de-normalized* translation. The normalized
-        # translation channels [dx, dy, dz] scale to metres by pos_scale;
-        # if that exceeds max_step, shrink the translation triple uniformly
-        # so the de-normalized norm sits exactly at max_step (direction
-        # preserved). Rotation (3..5) and gripper (6) are untouched.
-        xyz = action[DX_IDX : DZ_IDX + 1] * self.pos_scale
-        denorm = float(np.linalg.norm(xyz))
-        if denorm > self.max_step:
-            action[DX_IDX : DZ_IDX + 1] *= self.max_step / denorm
+    def _xbox_action_components(self, st) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Map the Xbox state -> normalized 7D action (gripper = self.gripper_value)."""
+        lx, ly = _dz(st.left_x), _dz(st.left_y)
+        ry, rxx = _dz(st.right_y), _dz(st.right_x)
 
-        return action
+        dxy = np.array([-ly, lx]) * XBOX_MAX_STEP   # up/down -> +X/-X ; L/R -> Y
+        nrm = float(np.linalg.norm(dxy))
+        if nrm > XBOX_MAX_STEP:
+            dxy *= XBOX_MAX_STEP / nrm
+        dz = -ry * XBOX_MAX_STEP
 
-    def _toggle_scale(self, s: XboxState) -> None:
-        """Y button edge toggle: fine <-> coarse."""
-        # We can't detect an edge without remembering the last frame;
-        # record_hybrid_demos (A3) tracks the edge for us. Here we just
-        # reflect the *current* button state and flip if it became
-        # pressed this call.
-        if s.y and not getattr(self, "_y_was_pressed", False):
-            if self.scale_mode == "fine":
-                self.scale = SCALE_COARSE
-                self.scale_mode = "coarse"
-            else:
-                self.scale = SCALE_FINE
-                self.scale_mode = "fine"
-        self._y_was_pressed = bool(s.y)
+        sx = sy = 0.0
+        if bool(getattr(st, "a", False)):           # A: straight-down push + spiral search (delta)
+            self._insert_ticks += 1
+            th = self._insert_ticks * self._dt
+            rr = min(XBOX_SPIRAL_R, XBOX_SPIRAL_RATE * th)
+            ang = XBOX_SPIRAL_W * th
+            nx, ny = rr * float(np.cos(ang)), rr * float(np.sin(ang))
+            sx, sy = nx - self._spiral_px, ny - self._spiral_py   # spiral DELTA this tick
+            self._spiral_px, self._spiral_py = nx, ny
+            dz = -XBOX_INSERT_REACH
+        else:
+            self._insert_ticks = 0
+            self._spiral_px = self._spiral_py = 0.0
 
-    # ------------------------------------------------------------------
-    # Public API — SpacemouseIntervention / GelloIntervention compatible
-    # ------------------------------------------------------------------
-    def action(self, action: np.ndarray) -> tuple[np.ndarray, bool]:
-        """Read the hub, return (expert_action, True) when RB is held."""
-        s = self.hub.poll()
-        self.last_state = s
-        self._toggle_scale(s)
+        dxyz = np.array([dxy[0] + sx, dxy[1] + sy, dz])
+        yaw_btn = float(getattr(st, "b", False)) - float(getattr(st, "x", False))  # 换绑: B=+yaw, X=-yaw(原右摇杆左右)
+        if XBOX_LOCK_ROTATION:
+            drotvec = np.zeros(3, dtype=float)
+        else:
+            drotvec = np.array([_dz(st.dpad_x), -_dz(st.dpad_y), yaw_btn]) * XBOX_ROT_STEP
+        action = normalize_action(dxyz, drotvec, self.gripper_value, ACTION_SCALE)
+        return action, dxyz, drotvec
 
-        if not s.rb:
-            return action, False
+    def action(self, action: np.ndarray) -> Tuple[np.ndarray, bool]:
+        """Return (chosen_action, is_intervening). RB held -> human overrides policy."""
+        try:
+            self._ensure_hub()
+            st = self._hub.poll()   # TeleopDeviceHub.poll() -> XboxState (NOT .read())
+        except Exception as e:
+            if not self._warned:
+                import traceback
+                traceback.print_exc()
+                print("[XboxIntervention] !!! hub poll FAILED (%s) -> NO RB takeover. Policy runs UNCHECKED."
+                      % type(e).__name__, flush=True)
+                self._warned = True
+            raise RuntimeError("Xbox input failed; Actor paused") from e
 
-        expert_full = self._state_to_action(s)
-
-        # Trim/expand to the env action dimension.
-        if self.action_indices is not None:
-            full = np.array(action, dtype=np.float32).copy()
-            full[self.action_indices] = expert_full[: len(self.action_indices)]
-            return full, True
-
-        if self.action_space.shape == (GRIPPERLESS_ACTION_DIM,):
-            return expert_full[:GRIPPERLESS_ACTION_DIM], True
-        return expert_full, True
+        rb = bool(getattr(st, "rb", False))
+        now = time.time()
+        if rb:
+            self._armed = True
+            self._last_intervene_t = now
+            xbox_action, dxyz, drotvec = self._xbox_action_components(st)
+            if now - getattr(self, "_dbg_t", 0.0) > 1.0:
+                self._dbg_t = now
+                import os as _os
+                print(
+                    "[XboxDBG] source=rb SDL=%s "
+                    "rot_locked=%d "
+                    "lx=%+.2f ly=%+.2f rx=%+.2f ry=%+.2f "
+                    "dpx=%+.0f dpy=%+.0f a=%d b=%d x=%d "
+                    "dxyz=%s drot=%s act_xyz=%s act_rot=%s" % (
+                        _os.environ.get("SDL_VIDEODRIVER"),
+                        int(XBOX_LOCK_ROTATION),
+                        float(getattr(st, "left_x", 0.0)),
+                        float(getattr(st, "left_y", 0.0)),
+                        float(getattr(st, "right_x", 0.0)),
+                        float(getattr(st, "right_y", 0.0)),
+                        float(getattr(st, "dpad_x", 0.0)),
+                        float(getattr(st, "dpad_y", 0.0)),
+                        int(getattr(st, "a", 0)),
+                        int(getattr(st, "b", 0)),
+                        int(getattr(st, "x", 0)),
+                        np.asarray(dxyz).round(4).tolist(),
+                        np.asarray(drotvec).round(4).tolist(),
+                        np.asarray(xbox_action[:3]).round(3).tolist(),
+                        np.asarray(xbox_action[3:6]).round(3).tolist(),
+                    ),
+                    flush=True,
+                )
+            return xbox_action, True
+        # debounce window: keep intervening (zero motion) briefly after RB release
+        if now - self._last_intervene_t < _HOLD_SECONDS:
+            self._insert_ticks = 0
+            self._spiral_px = self._spiral_py = 0.0
+            return np.zeros(7, dtype=np.float32), True
+        self._insert_ticks = 0
+        self._spiral_px = self._spiral_py = 0.0
+        if not self._armed:   # 开局未按过 RB -> 保持零动作不动(不放 policy)
+            return np.zeros(7, dtype=np.float32), True
+        return action, False
 
     def step(self, action):
-        new_action, replaced = self.action(action)
+        new_action, intervened = self.action(np.asarray(action))
         obs, rew, done, truncated, info = self.env.step(new_action)
-        if replaced:
+        if intervened:
             info["intervene_action"] = new_action
         return obs, rew, done, truncated, info
 

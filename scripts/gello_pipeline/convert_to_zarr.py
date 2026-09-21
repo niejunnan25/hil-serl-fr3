@@ -7,14 +7,14 @@
   1. 加载 npz: joint_poses, gripper_states, timestamps
   2. FK 转换: joints_to_cartesian_delta(q[t-1], q[t]) -> 6D delta
   3. 归一化 action: normalize_action(cartesian_delta, gripper) -> 7D [-1, 1]
-  4. 构建 observations: state = [joint_poses(7), gripper(1)]
+  4. 构建 observations: state = [joint_poses(7), gripper(1)] (legacy only)
   5. 保存为 zarr 格式
 
 目标 zarr 结构:
   {
       "observations": {
           "images": {"wrist_1": (N, H, W, 3) uint8},  # Phase 2 暂为空
-          "state":    (N, 8) float32,                   # 7 joints + 1 gripper
+          "state":    (N, 8) float32,                   # legacy 7 joints + 1 gripper
       },
       "actions":  (N, 7) float32,   # normalized [-1, 1]
       "rewards":  (N,)   float32,   # zeros (demo data has no rewards)
@@ -28,7 +28,7 @@
 
 用法:
   python convert_to_zarr.py input.npz output.zarr
-  python convert_to_zarr.py input.npz output.zarr --pos-scale 0.1 --rpy-scale 0.2
+  python convert_to_zarr.py input.npz output.zarr --allow-legacy-8d
   python convert_to_zarr.py /tmp/gello_demos/ --output-dir /tmp/zarr_demos
   python convert_to_zarr.py /tmp/gello_demos/ --output-dir /tmp/zarr_demos --overwrite
 """
@@ -52,8 +52,13 @@ from normalize_action import normalize_action
 # ---------------------------------------------------------------------------
 # 默认 action scale 参数
 # ---------------------------------------------------------------------------
-DEFAULT_POS_SCALE = 0.1    # xyz 归一化分母 (meters)
-DEFAULT_RPY_SCALE = 0.2    # roll/pitch/yaw 归一化分母 (radians)
+DEFAULT_POS_SCALE = 0.015  # xyz 归一化分母 (meters), EnvConfig.ACTION_SCALE[0]
+DEFAULT_RPY_SCALE = 0.1    # rotvec 归一化分母 (radians), EnvConfig.ACTION_SCALE[3]
+LEGACY_8D_WARNING = (
+    "convert_to_zarr currently emits legacy 8D joint-state observations "
+    "([joint_poses(7), gripper(1)]), not the live SERL19 flat state. "
+    "Pass allow_legacy_8d=True or --allow-legacy-8d only for explicit offline legacy use."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +68,7 @@ def convert_npz_to_zarr_data(
     npz_path: str,
     pos_scale: float = DEFAULT_POS_SCALE,
     rpy_scale: float = DEFAULT_RPY_SCALE,
+    allow_legacy_8d: bool = False,
 ) -> dict:
     """将单个 npz 文件转换为 zarr 可写入的 dict 结构。
 
@@ -77,6 +83,9 @@ def convert_npz_to_zarr_data(
     Raises:
         ValueError: 输入数据格式不正确
     """
+    if not allow_legacy_8d:
+        raise RuntimeError(LEGACY_8D_WARNING)
+
     # --- 1. 加载 npz ---
     data = np.load(npz_path)
 
@@ -146,6 +155,8 @@ def convert_npz_to_zarr_data(
             "num_frames": N,
             "pos_scale": pos_scale,
             "rpy_scale": rpy_scale,
+            "state_layout": "legacy_joint_gripper_8d",
+            "allow_legacy_8d": True,
             "timestamps": timestamps,
         },
     }
@@ -180,15 +191,21 @@ def save_zarr(data: dict, output_path: str, overwrite: bool = False) -> str:
     N = len(data["actions"])
     chunk_1d = min(1024, N)
 
-    # Use zarr v2 format for broad compatibility.
-    # zarr v3's library still supports zarr_format=2 for reading/writing.
-    root = zarr.open_group(output_path, mode="w", zarr_format=2)
+    try:
+        root = zarr.open_group(output_path, mode="w", zarr_format=2)
+        use_v3_api = True
+    except TypeError:
+        root = zarr.open_group(output_path, mode="w")
+        use_v3_api = False
     compressor = Zstd(level=3)
 
-    # helper: create_array with v2-style compressor
     def _ds(group, name, arr, chunks):
-        return group.create_array(
-            name, data=arr, chunks=chunks, compressors=compressor,
+        if use_v3_api:
+            return group.create_array(
+                name, data=arr, chunks=chunks, compressors=compressor,
+            )
+        return group.create_dataset(
+            name, data=arr, chunks=chunks, compressor=compressor,
         )
 
     # observations/state
@@ -213,6 +230,8 @@ def save_zarr(data: dict, output_path: str, overwrite: bool = False) -> str:
     root.attrs["num_frames"] = data["_meta"]["num_frames"]
     root.attrs["pos_scale"] = data["_meta"]["pos_scale"]
     root.attrs["rpy_scale"] = data["_meta"]["rpy_scale"]
+    root.attrs["state_layout"] = data["_meta"].get("state_layout", "unknown")
+    root.attrs["allow_legacy_8d"] = bool(data["_meta"].get("allow_legacy_8d", False))
 
     return output_path
 
@@ -220,7 +239,7 @@ def save_zarr(data: dict, output_path: str, overwrite: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # 验证工具
 # ---------------------------------------------------------------------------
-def verify_zarr(zarr_path: str) -> bool:
+def verify_zarr(zarr_path: str, allow_legacy_8d: bool = False) -> bool:
     """验证输出 zarr 文件的结构和数据范围。
 
     Args:
@@ -277,9 +296,15 @@ def verify_zarr(zarr_path: str) -> bool:
 
     # 检查 state 维度
     state_dim = root["observations/state"].shape[1]
-    dim_str = "OK" if state_dim == 8 else "FAIL"
-    print(f"  [{dim_str}] state dim: {state_dim} (expect 8)")
-    if state_dim != 8:
+    if state_dim == 19:
+        print(f"  [OK] state dim: {state_dim} (live SERL19)")
+    elif state_dim == 8 and allow_legacy_8d:
+        print(f"  [OK] state dim: {state_dim} (explicit legacy 8D)")
+    elif state_dim == 8:
+        print(f"  [FAIL] state dim: {state_dim} is legacy 8D; pass allow_legacy_8d=True only for explicit legacy use")
+        ok = False
+    else:
+        print(f"  [FAIL] state dim: {state_dim} (expect live 19D)")
         ok = False
 
     # 检查 actions 维度
@@ -299,7 +324,7 @@ def verify_zarr(zarr_path: str) -> bool:
 
     # 元数据
     print(f"\n  Metadata:")
-    for key in ["source_npz", "num_frames", "pos_scale", "rpy_scale"]:
+    for key in ["source_npz", "num_frames", "pos_scale", "rpy_scale", "state_layout", "allow_legacy_8d"]:
         val = root.attrs.get(key, "MISSING")
         print(f"    {key}: {val}")
 
@@ -357,6 +382,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip verification after conversion",
     )
+    parser.add_argument(
+        "--allow-legacy-8d",
+        action="store_true",
+        help="acknowledge that output uses legacy 8D joint-state observations, not live SERL19",
+    )
 
     return parser
 
@@ -394,12 +424,13 @@ def main():
                     npz_file,
                     pos_scale=args.pos_scale,
                     rpy_scale=args.rpy_scale,
+                    allow_legacy_8d=args.allow_legacy_8d,
                 )
                 save_zarr(data, zarr_path, overwrite=args.overwrite)
                 print(f"  Saved: {zarr_path}")
 
                 if not args.no_verify:
-                    verify_zarr(zarr_path)
+                    verify_zarr(zarr_path, allow_legacy_8d=args.allow_legacy_8d)
 
                 success_count += 1
             except Exception as e:
@@ -436,12 +467,13 @@ def main():
             input_path,
             pos_scale=args.pos_scale,
             rpy_scale=args.rpy_scale,
+            allow_legacy_8d=args.allow_legacy_8d,
         )
         save_zarr(data, zarr_path, overwrite=args.overwrite)
         print(f"\n  Saved: {zarr_path}")
 
         if not args.no_verify:
-            verify_zarr(zarr_path)
+            verify_zarr(zarr_path, allow_legacy_8d=args.allow_legacy_8d)
 
         print("\nDone.")
 

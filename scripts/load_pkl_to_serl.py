@@ -44,7 +44,7 @@ if SCRIPT_DIR not in sys.path:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fk_converter import trajectory_to_cartesian_deltas
+from fk_converter import forward_kinematics
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,8 @@ SERL_IMAGE_SHAPE = (3, 128, 128)
 def joints_to_tcp_pose(joint_poses: np.ndarray) -> np.ndarray:
     """将关节角度转换为 TCP 位姿 (xyz + quaternion)。
 
-    使用 FK 计算 TCP 位置，姿态用单位四元数近似 (demo 数据中无姿态信息)。
+    使用 FK 计算绝对 TCP pose。不要通过单帧 delta 累积；单帧输入的
+    trajectory_to_cartesian_deltas() 首帧 delta 必然为 0，会把 pose 压成原点。
 
     Args:
         joint_poses: (N, 7) 关节角度
@@ -75,21 +76,10 @@ def joints_to_tcp_pose(joint_poses: np.ndarray) -> np.ndarray:
     Returns:
         (N, 7) TCP 位姿 [x, y, z, qw, qx, qy, qz]
     """
-    N = len(joint_poses)
-
-    # 使用 FK 计算 Cartesian 位姿 (取位置，姿态用单位四元数)
-    cartesian_deltas = trajectory_to_cartesian_deltas(joint_poses)  # (N, 6) [dx,dy,dz,dr,dp,dy]
-
-    # 累积位移得到绝对位置
-    tcp_positions = np.cumsum(cartesian_deltas[:, :3], axis=0)  # (N, 3)
-
-    # 单位四元数 (无旋转信息)
-    unit_quat = np.tile([1.0, 0.0, 0.0, 0.0], (N, 1))  # (N, 4)
-
-    # 组合: [x, y, z, qw, qx, qy, qz]
-    tcp_pose = np.concatenate([tcp_positions, unit_quat], axis=1).astype(np.float32)
-
-    return tcp_pose
+    q_arr = np.asarray(joint_poses, dtype=np.float64)
+    if q_arr.ndim != 2 or q_arr.shape[1] != 7:
+        raise ValueError(f"joint_poses must have shape (N, 7), got {q_arr.shape}")
+    return np.stack([forward_kinematics(q) for q in q_arr], axis=0).astype(np.float32)
 
 
 def convert_transition_to_serl(

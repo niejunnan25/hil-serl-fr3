@@ -39,6 +39,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+
+LIVE_SERL_STATE_DIM = 19
+LEGACY_8D_STATE_DIM = 8
+LEGACY_8D_WARNING = (
+    "zarr contains legacy 8D joint-state observations, not the live SERL19 flat state. "
+    "Pass allow_legacy_8d=True or --allow-legacy-8d only for explicit offline legacy use."
+)
+
 # ---------------------------------------------------------------------------
 # 尝试导入 SERL 原生 replay buffer
 # ---------------------------------------------------------------------------
@@ -255,6 +263,7 @@ def load_zarr_to_serl_buffer(
     rl_capacity: int = 500_000,
     n_steps: int = 1,
     gamma: float = 0.99,
+    allow_legacy_8d: bool = False,
 ) -> Dict[str, Any]:
     """将 zarr 文件加载到 replay buffer (SERL 或 SimpleReplayBuffer)。
 
@@ -275,6 +284,7 @@ def load_zarr_to_serl_buffer(
     first_root = zarr.open(zarr_paths[0], mode="r")
     obs_dim = first_root["observations/state"].shape[1]
     action_dim = first_root["actions"].shape[1]
+    _require_supported_state_dim(obs_dim, allow_legacy_8d=allow_legacy_8d)
 
     capacity = demo_capacity if buffer_type == "demo" else rl_capacity
 
@@ -374,7 +384,7 @@ def _load_with_serl_buffer(
 # ---------------------------------------------------------------------------
 # 验证工具
 # ---------------------------------------------------------------------------
-def verify_zarr_for_buffer(zarr_path: str) -> bool:
+def verify_zarr_for_buffer(zarr_path: str, allow_legacy_8d: bool = False) -> bool:
     """验证 zarr 文件是否满足 replay buffer 加载条件。
 
     Args:
@@ -383,6 +393,10 @@ def verify_zarr_for_buffer(zarr_path: str) -> bool:
     Returns:
         bool: 验证是否通过
     """
+    return _verify_zarr_for_buffer(zarr_path, allow_legacy_8d=allow_legacy_8d)
+
+
+def _verify_zarr_for_buffer(zarr_path: str, allow_legacy_8d: bool = False) -> bool:
     import zarr
 
     if not os.path.exists(zarr_path):
@@ -452,7 +466,16 @@ def verify_zarr_for_buffer(zarr_path: str) -> bool:
 
     # 6. state 维度
     state_dim = observations.shape[1]
-    print(f"  [{'OK' if state_dim == 8 else 'WARN'}] state dim: {state_dim} (expected 8 for joints+gripper)")
+    if state_dim == LIVE_SERL_STATE_DIM:
+        print(f"  [OK] state dim: {state_dim} (live SERL19)")
+    elif state_dim == LEGACY_8D_STATE_DIM and allow_legacy_8d:
+        print(f"  [OK] state dim: {state_dim} (explicit legacy 8D)")
+    elif state_dim == LEGACY_8D_STATE_DIM:
+        print(f"  [FAIL] state dim: {state_dim} is legacy 8D; pass allow_legacy_8d=True only for explicit legacy use")
+        ok = False
+    else:
+        print(f"  [FAIL] state dim: {state_dim} (expect live {LIVE_SERL_STATE_DIM}D)")
+        ok = False
 
     # 7. action 维度
     action_dim = actions.shape[1]
@@ -474,6 +497,7 @@ def create_demo_and_rl_buffers(
     rl_capacity: int = 500_000,
     n_steps: int = 1,
     gamma: float = 0.99,
+    allow_legacy_8d: bool = False,
 ) -> Dict[str, Any]:
     """创建 demo + RL 双缓冲区，并将 zarr 数据加载到 demo buffer。
 
@@ -493,6 +517,7 @@ def create_demo_and_rl_buffers(
     first_root = zarr.open(zarr_paths[0], mode="r")
     obs_dim = first_root["observations/state"].shape[1]
     action_dim = first_root["actions"].shape[1]
+    _require_supported_state_dim(obs_dim, allow_legacy_8d=allow_legacy_8d)
 
     print(f"\n{'='*60}")
     print(f"创建双缓冲区")
@@ -626,6 +651,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="静默模式, 减少输出",
     )
+    parser.add_argument(
+        "--allow-legacy-8d",
+        action="store_true",
+        help="acknowledge that input zarr uses legacy 8D joint-state observations, not live SERL19",
+    )
 
     return parser
 
@@ -644,7 +674,7 @@ def main():
     if args.verify_only:
         all_ok = True
         for path in args.zarr_paths:
-            ok = verify_zarr_for_buffer(path)
+            ok = _verify_zarr_for_buffer(path, allow_legacy_8d=args.allow_legacy_8d)
             if not ok:
                 all_ok = False
 
@@ -657,7 +687,7 @@ def main():
     # 先验证
     if not args.quiet:
         for path in args.zarr_paths:
-            verify_zarr_for_buffer(path)
+            _verify_zarr_for_buffer(path, allow_legacy_8d=args.allow_legacy_8d)
 
     # 加载
     t0 = time.time()
@@ -669,6 +699,7 @@ def main():
             rl_capacity=args.rl_capacity,
             n_steps=args.n_steps,
             gamma=args.gamma,
+            allow_legacy_8d=args.allow_legacy_8d,
         )
         demo_info = buffers["demo"]
         rl_info = buffers["rl"]
@@ -698,6 +729,7 @@ def main():
             rl_capacity=args.rl_capacity,
             n_steps=args.n_steps,
             gamma=args.gamma,
+            allow_legacy_8d=args.allow_legacy_8d,
         )
 
         buffer = result["buffer"]
@@ -751,6 +783,16 @@ __all__ = [
     "create_demo_and_rl_buffers",
     "verify_zarr_for_buffer",
 ]
+
+
+def _require_supported_state_dim(obs_dim: int, *, allow_legacy_8d: bool) -> None:
+    if obs_dim == LIVE_SERL_STATE_DIM:
+        return
+    if obs_dim == LEGACY_8D_STATE_DIM and allow_legacy_8d:
+        return
+    if obs_dim == LEGACY_8D_STATE_DIM:
+        raise RuntimeError(LEGACY_8D_WARNING)
+    raise RuntimeError(f"Unsupported zarr observation state dim {obs_dim}; expected live {LIVE_SERL_STATE_DIM}D")
 
 
 if __name__ == "__main__":

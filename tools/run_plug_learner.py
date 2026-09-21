@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
-from fr3_experiments.plug_insertion.runner import main
-
+"""Compatibility alias for the unified project runtime."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from hilserl.__main__ import main
 
 if __name__ == "__main__":
-    main(default_role="learner")
+    raise SystemExit(main(["train", "--learner-only", *sys.argv[1:]]))

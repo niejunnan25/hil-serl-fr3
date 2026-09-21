@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "dependencies": [
+    {
+      "name": "hil-serl",
+      "url": "https://github.com/rail-berkeley/hil-serl.git",
+      "commit": "c32939bccb65f3b8c43a9f9add3d322d4ab0264a",
+      "path": "upstream/hil-serl",
+      "patch": "vendor/patches/hil-serl.patch",
+      "sha256": "dad0dcd2f2c533a7455254147d4c3a52b23aae15883e1992d88a6524df177451"
+    },
+    {
+      "name": "serl",
+      "url": "https://github.com/rail-berkeley/serl.git",
+      "commit": "1fa2af7496be042e43d36120a7c8d1b71f1bfb59",
+      "path": "upstream/serl",
+      "patch": "vendor/patches/serl.patch",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "agentlace",
+      "url": "https://github.com/youliangtan/agentlace.git",
+      "commit": "cf2c337c5e3694cdbfc14831b239bd657bc4894d",
+      "path": "upstream/agentlace",
+      "patch": "vendor/patches/agentlace.patch",
+      "sha256": "564f7158fcb7902b55b929f0385ce3814b6eb044403689a704288a64ce513925"
+    },
+    {
+      "name": "serl_franka_controllers",
+      "url": "https://github.com/rail-berkeley/serl_franka_controllers.git",
+      "commit": "1f140ef0d8e3fc443569c193d3ede1856e50d521",
+      "path": "upstream/serl_franka_controllers",
+      "patch": "vendor/patches/serl_franka_controllers.patch",
+      "sha256": "877e88f2bb72b80f726ba21aa487938bd6c4d7affbf3dc32cb4a6879eed9d528"
+    }
+  ]
+}

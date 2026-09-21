@@ -15,6 +15,7 @@ from franka_env.utils.rotations import euler_2_quat, quat_2_euler
 
 HYBRID = "/home/robot/hilserl-fr3/demos/hybrid"
 EXCL = ["194411", "194646", "194847", "195923", "200908", "204527"]
+DEFAULT_QUAT_ATOL = 2e-3
 
 
 def insertion_start(x, seated_x, margin=0.05):
@@ -44,7 +45,18 @@ def invert(q):
             qq = -qq
         return qq - q
     sol = least_squares(resid, x0=quat_2_euler(q))
-    return sol.x, euler_2_quat(sol.x)
+    check = euler_2_quat(sol.x)
+    if np.dot(check, q) < 0:
+        check = -check
+    residual_norm = float(np.linalg.norm(check - q))
+    if not sol.success or residual_norm > DEFAULT_QUAT_ATOL:
+        raise RuntimeError(
+            "orientation inversion failed: "
+            f"success={sol.success} residual_norm={residual_norm:.6g} "
+            f"cost={float(sol.cost):.6g} optimality={float(sol.optimality):.6g} "
+            f"message={sol.message}"
+        )
+    return sol.x, check
 
 
 def main():
@@ -64,12 +76,11 @@ def main():
     for name, qs in [("TARGET (seated)", seated_q), ("RESET (insertion-start)", ins_q)]:
         qm = chordal_mean_quat(qs)
         e, check = invert(qm)
-        align = check if np.dot(check, qm) >= 0 else -check
         print(f"\n{name}")
         print("  target quat xyzw      :", np.round(qm, 4).tolist())
         print("  config euler (for euler_2_quat):", np.round(e, 5).tolist())
-        print("  euler_2_quat(euler)   :", np.round(align, 4).tolist())
-        print("  match:", bool(np.allclose(align, qm, atol=2e-3)))
+        print("  euler_2_quat(euler)   :", np.round(check, 4).tolist())
+        print("  match:", bool(np.allclose(check, qm, atol=DEFAULT_QUAT_ATOL)))
 
 
 if __name__ == "__main__":

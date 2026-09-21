@@ -18,11 +18,71 @@ from franka_env.utils.rotations import euler_2_quat
 
 RESET_STRICT = os.environ.get("RESET_STRICT", "1").strip().lower() in ("1", "true", "yes", "on")
 MANUAL_RESET = os.environ.get("MANUAL_RESET", "").strip().lower() in ("1", "true", "yes", "on")
+RESET_JOINT_LIMIT_MARGIN_DEG = float(os.environ.get("RESET_JOINT_LIMIT_MARGIN_DEG", "12.0"))
+DROP_GRIPPER_MIN = float(os.environ.get("DROP_GRIPPER_MIN", "0.40"))
+RESET_MOTION_EFFECTIVE_SPEED = float(os.environ.get("RESET_MOTION_EFFECTIVE_SPEED", "0.002"))
+RESET_MOTION_MAX_TIMEOUT = float(os.environ.get("RESET_MOTION_MAX_TIMEOUT", "90.0"))
+RESET_MOTION_SETTLE_TIMEOUT = float(os.environ.get("RESET_MOTION_SETTLE_TIMEOUT", "8.0"))
+RESET_POSITION_TOLERANCE = 0.012
+RESET_ROTATION_TOLERANCE = 0.12
+RESET_STALL_TIMEOUT = 8.0
+RESET_HTTP_TIMEOUT = (2.0, 5.0)
+RESET_GRIPPER_OPEN_THRESHOLD = 0.85
+
+FR3_RESET_LOWER_LIMITS = np.array([-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159])
+FR3_RESET_UPPER_LIMITS = np.array([2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159])
 
 # Ensure project root is on path for scripts/ imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from scripts.zed_capture import ZEDCapture
 from scripts.video_capture import VideoCapture
+from hilserl.errors import RobotStateUnavailable
+
+
+def joint_limit_margin_degrees(q):
+    q = np.asarray(q, dtype=float).reshape(-1)
+    if q.shape != (7,) or not np.all(np.isfinite(q)):
+        raise ValueError("reset requires seven finite joint positions")
+    margins = np.degrees(np.minimum(q - FR3_RESET_LOWER_LIMITS, FR3_RESET_UPPER_LIMITS - q))
+    joint_index = int(np.argmin(margins))
+    return float(margins[joint_index]), joint_index, margins
+
+
+def is_plug_held(gripper_pos, threshold=DROP_GRIPPER_MIN):
+    """Check plausible held width only; a width cannot prove a secure grasp.
+
+    The server reports normalized opening: 1 is fully open, 0 fully closed.
+    Retain the calibrated lower bound, and reject the existing open threshold.
+    """
+    value = np.asarray(gripper_pos, dtype=float).reshape(-1)
+    return bool(value.size == 1 and np.isfinite(value[0])
+                and float(threshold) <= value[0] < RESET_GRIPPER_OPEN_THRESHOLD)
+
+
+def sample_reset_pose(config, rng=np.random):
+    """Sample a 6D reset pose from the configured SERL fixed reset region."""
+    reset_pose = copy.deepcopy(np.asarray(config.RESET_POSE, dtype=float)).reshape(6)
+    if getattr(config, "RANDOM_RESET", False):
+        reset_pose[:2] += rng.uniform(
+            -float(config.RANDOM_XY_RANGE),
+            float(config.RANDOM_XY_RANGE),
+            size=(2,),
+        )
+        reset_pose[5] += float(rng.uniform(
+            -float(config.RANDOM_RZ_RANGE),
+            float(config.RANDOM_RZ_RANGE),
+        ))
+    return reset_pose
+
+
+def compute_reset_clear_pose(currpos, config):
+    """Return the hold-grip vertical clear pose for reset."""
+    clear = copy.deepcopy(np.asarray(currpos, dtype=float)).reshape(7)
+    configured_clear_z = getattr(config, "RESET_CLEAR_Z", None)
+    if configured_clear_z is None:
+        configured_clear_z = float(config.TARGET_POSE[2] + 0.12)
+    clear[2] = max(float(clear[2]), float(configured_clear_z))
+    return clear
 
 
 class PlugInsertionEnv(FrankaEnv):
@@ -30,13 +90,23 @@ class PlugInsertionEnv(FrankaEnv):
     插插头任务环境。
 
     任务流程:
-    1. reset: 机械臂移动到初始位姿，张开夹爪
+    1. reset: 保持夹持，逐阶段验证机械臂到达初始位姿；不自动开合夹爪
     2. step:  接收 7D 归一化动作，发送到机器人，返回观测
     3. 判定:  奖励由分类器 + 位姿联合给出
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, recorder=None, operator=None, **kwargs):
+        self.recorder = recorder
+        self.operator = operator
+        self._state_capture = None
+        self._step_commands = []
+        self.frame_references = {}
+        self.last_reset_info = None
+        try:
+            super().__init__(**kwargs)
+        except BaseException:
+            self.close()
+            raise
         # 插入状态跟踪
         self._insertion_started = False
         self._contact_detected = False
@@ -64,215 +134,514 @@ class PlugInsertionEnv(FrankaEnv):
                     k: v for k, v in kwargs.items()
                     if k in ("serial_number", "dim", "fps", "exposure")
                 }
-                cap = VideoCapture(
-                    ZEDCapture(name=cam_name, **zed_kwargs)
-                )
+                zed_kwargs["fps"] = int(os.environ.get("HILSERL_VIDEO_FPS", zed_kwargs.get("fps", 30)))
+                cap = VideoCapture(ZEDCapture(name=cam_name, **zed_kwargs),
+                                   name=cam_name, recorder=self.recorder, continuous=True)
                 self.cap[cam_name] = cap
+
+    def get_im(self):
+        import cv2
+        images, display, packets = {}, {}, {}
+        for key, cap in self.cap.items():
+            if id(cap) not in packets:
+                packets[id(cap)] = (cap.read(), cap.last_read)
+            frame, reference = packets[id(cap)]
+            profile = getattr(self.config, "IMAGE_PROFILE", "full-frame128-v1")
+            if profile != "full-frame128-v1":
+                from hilserl.image_profile import crop_image, preprocess_image
+                crop = crop_image(frame, key, profile)
+                images[key] = preprocess_image(frame, key, profile)
+                resized = images[key][..., ::-1]
+                if images[key].shape != self.observation_space["images"][key].shape:
+                    raise ValueError("Image profile and environment observation space differ")
+            else:
+                crop = self.config.IMAGE_CROP[key](frame) if key in self.config.IMAGE_CROP else frame
+                resized = cv2.resize(crop, self.observation_space["images"][key].shape[:2][::-1])
+                images[key] = resized[..., ::-1].copy()
+            display[key] = resized
+            display[key + "_full"] = crop
+            self.frame_references[key] = dict(reference) if reference else None
+        if self.display_image:
+            self.img_queue.put(display)
+        return images
+
+    def raw_state(self):
+        from hilserl.storage import stamp
+        fields = {"tcp_pose": "currpos", "tcp_vel": "currvel", "tcp_force": "currforce",
+                  "tcp_torque": "currtorque", "q": "q", "dq": "dq", "jacobian": "currjacobian",
+                  "gripper_pose": "curr_gripper_pos"}
+        return dict(values={name: np.asarray(getattr(self, attr)).copy() for name, attr in fields.items()},
+                    capture=self._state_capture or stamp())
+
+    def _update_currpos(self):
+        from hilserl.storage import stamp
+        before = stamp()
+        try:
+            state = self._robot_post("getstate").json()
+        except ValueError as exc:
+            raise RobotStateUnavailable("FR3 状态响应不是有效 JSON，已暂停动作。",
+                                        details={"reason": "invalid_json"}) from exc
+        health = {key: value for key, value in state.items()
+                  if key.endswith(("_age_seconds", "_stale", "_sequence"))
+                  or key in {"controller_running", "controller_exit_code", "pose_subscribers"}} if isinstance(state, dict) else {}
+        # Legacy bridges return plausible cached numbers after ROS has died.
+        # Require independent callback freshness before using a state for any
+        # reset, action, or recording; HTTP response time is not sensor time.
+        if not isinstance(state, dict) or state.get("controller_running") is not True:
+            raise RobotStateUnavailable("FR3 控制器未运行或状态时效未确认；请恢复底层控制服务。",
+                                        health=health)
+        for prefix in ("state", "jacobian", "gripper_state"):
+            age = state.get(prefix + "_age_seconds")
+            if (state.get(prefix + "_stale") is not False or type(age) not in (int, float)
+                    or not np.isfinite(age) or not 0 <= age <= 2.0):
+                raise RobotStateUnavailable(f"FR3 {prefix} 状态缺失或已过期，禁止复位和采集。",
+                                            health=health, details={"feedback": prefix})
+        fields = {"currpos": "pose", "currvel": "vel", "currforce": "force",
+                  "currtorque": "torque", "q": "q", "dq": "dq",
+                  "curr_gripper_pos": "gripper_pos"}
+        # Validate the entire response before replacing any cached measurements.
+        sizes = {"pose": 7, "vel": 6, "force": 3, "torque": 3, "q": 7,
+                 "dq": 7, "gripper_pos": 1, "jacobian": 42}
+        try:
+            values = {key: np.asarray(state[key], dtype=float) for key in sizes}
+            for key, size in sizes.items():
+                if values[key].size != size or not np.all(np.isfinite(values[key])):
+                    raise ValueError(f"invalid {key}: expected {size} finite values")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RobotStateUnavailable(f"FR3 状态字段无效，已暂停动作：{exc}",
+                                        health=health, details={"reason": "invalid_state"}) from exc
+        for attr, key in fields.items():
+            setattr(self, attr, values[key].reshape(-1) if key != "gripper_pos" else values[key].reshape(()))
+        self.currjacobian = values["jacobian"].reshape(6, 7)
+        self._state_capture = dict(request=before, response=stamp(), server_health=health)
+
+    def _robot_post(self, endpoint, **kwargs):
+        """One bounded request; never retry an action with unknown delivery."""
+        self._check_recording_and_stop()
+        try:
+            response = requests.post(self.url + endpoint, timeout=RESET_HTTP_TIMEOUT, **kwargs)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            unknown = endpoint != "getstate"
+            message = (f"FR3 {endpoint} 通信失败，已暂停动作：{exc}"
+                       + ("；命令是否送达未知，不会自动重发。" if unknown else ""))
+            raise RobotStateUnavailable(message, endpoint=endpoint, delivery_unknown=unknown,
+                                        details={"transport_error": type(exc).__name__}) from exc
+        if getattr(response, "status_code", None) == 503:
+            try:
+                details = response.json()
+            except ValueError:
+                details = {"error": str(getattr(response, "text", "Service unavailable"))[:1000]}
+            if not isinstance(details, dict):
+                details = {"error": str(details)}
+            health = details.get("health", {})
+            if not isinstance(health, dict):
+                health = {}
+            health.update({key: value for key, value in details.items()
+                           if key.endswith(("_age_seconds", "_stale", "_sequence"))
+                           or key in {"controller_running", "controller_exit_code", "pose_subscribers"}})
+            reason = details.get("error") or details.get("reason") or details.get("message") or "Service unavailable"
+            raise RobotStateUnavailable(f"FR3 {endpoint} 暂不可用（HTTP 503）：{reason}",
+                                        endpoint=endpoint, status_code=503, details=details,
+                                        health=health, delivery_unknown=endpoint != "getstate")
+        response.raise_for_status()
+        self._check_recording_and_stop()
+        return response
+
+    def _recover(self):
+        self._robot_post("clearerr")
+
+    def _check_recording_and_stop(self):
+        if getattr(self, "recorder", None):
+            self.recorder.check()
+        if getattr(self, "operator", None):
+            self.operator.raise_if_stop()
+
+    def _send_pos_command(self, pos):
+        from hilserl.storage import stamp
+        self._check_recording_and_stop()
+        item = dict(kind="pose", pose=np.asarray(pos, dtype=np.float32).copy(), sent=stamp(),
+                    request_sent=False, returned=False)
+        self._step_commands.append(item)
+        if self.clearerr_on_pose:
+            self._recover()
+        item.update(request_sent=True, sent=stamp())
+        try:
+            self._robot_post("pose", json={"arr": np.asarray(pos, dtype=np.float32).tolist()})
+        except RobotStateUnavailable as exc:
+            item.update(error=exc.as_dict(), delivery_unknown=exc.delivery_unknown, response=stamp())
+            raise
+        item.update(returned=True, response=stamp())
+
+    def _send_gripper_command(self, pos, mode="binary"):
+        """Preserve the binary/cooldown contract while recording one HTTP attempt."""
+        from hilserl.storage import stamp
+        if mode != "binary":
+            raise NotImplementedError("Continuous gripper control is optional")
+        if time.time() - self.last_gripper_act <= self.gripper_sleep:
+            return
+        endpoint = ("close_gripper" if pos <= -.5 and self.curr_gripper_pos > .85 else
+                    "open_gripper" if pos >= .5 and self.curr_gripper_pos < .85 else None)
+        if endpoint is None:
+            return
+        self._check_recording_and_stop()
+        item = dict(kind="gripper", endpoint=endpoint, sent=stamp(), request_sent=True, returned=False)
+        self._step_commands.append(item)
+        try:
+            self._robot_post(endpoint)
+        except RobotStateUnavailable as exc:
+            item.update(error=exc.as_dict(), delivery_unknown=exc.delivery_unknown, response=stamp())
+            raise
+        item.update(returned=True, response=stamp())
+        self.last_gripper_act = time.time()
+        time.sleep(self.gripper_sleep)
+
+    def step(self, action):
+        self._step_commands = []
+        self._check_recording_and_stop()
+        base_action = np.asarray(action).copy()
+        try:
+            # Sampling may take longer than the feedback freshness window. Check
+            # again before super().step can send either a gripper or pose action.
+            self._update_currpos()
+            for attr, limit_attr in (("currforce", "safety_force_max"), ("dq", "safety_dq_max")):
+                values = np.asarray(getattr(self, attr), dtype=float)
+                value = float(np.linalg.norm(values) if attr == "currforce" else np.max(np.abs(values)))
+                if not np.isfinite(value) or value > float(getattr(self, limit_attr)):
+                    raise RuntimeError(f"[franka_safety_fatal] {attr}={value} > {getattr(self, limit_attr)}")
+            obs, reward, done, truncated, info = super().step(action)
+        except BaseException as exc:
+            if self.recorder:
+                self.recorder.event("step_interrupted", error=type(exc).__name__,
+                                    commands=[{**c, **({"pose": c["pose"].tolist()} if "pose" in c else {})}
+                                              for c in self._step_commands])
+            raise
+        reason = "environment_success" if reward else "environment_terminate" if self.terminate else None
+        if reason is None and self.curr_path_length >= self.max_episode_length:
+            reason, done, truncated = "time_limit", False, True
+        info.update(termination_reason=reason, controller_input_action=base_action,
+                    controller_commands=self._step_commands, raw_next_state=self.raw_state(),
+                    next_frame_references=dict(self.frame_references))
+        return obs, reward, done, truncated, info
+
+    def _operator_input(self, prompt):
+        if getattr(self, "operator", None):
+            return self.operator.input(prompt, check=self.recorder.check if self.recorder else None)
+        return input(prompt)
+
+    def close(self):
+        if getattr(self, "_hilserl_closed", False):
+            return
+        self._hilserl_closed = True
+        if hasattr(self, "listener"):
+            self.listener.stop()
+        for cap in set((getattr(self, "cap", None) or {}).values()):
+            cap.close()
+        if hasattr(self, "img_queue"):
+            self.img_queue.put(None)
+        if hasattr(self, "displayer"):
+            self.displayer.join(timeout=3)
 
     # ----------------------------------------------------------
     # Reset: 初始化到抓取/对准起始位置
     # ----------------------------------------------------------
+    def _reset_progress(self, phase, *, state="running", force=False, **details):
+        """Publish measured evidence. Only reset() may mark the whole reset successful."""
+        now = time.monotonic()
+        if (not getattr(self, "last_reset_info", None)
+                or state in ("running", "moving") and self.last_reset_info.get("state") != "running"):
+            self._reset_started = now
+            self.last_reset_info = dict(success=False, state="running", phases=[])
+        info = self.last_reset_info
+        info.update(phase=phase, elapsed_seconds=now - self._reset_started)
+        phases = info["phases"]
+        if not phases or phases[-1]["name"] != phase:
+            self._reset_phase_started = now
+            phases.append(dict(name=phase))
+        phases[-1].update(state=state, elapsed_seconds=now - self._reset_phase_started, **details)
+        if state in ("failed", "cancelled"):
+            info.update(success=False, state=state, reason=details.get("reason", state))
+        snapshot = copy.deepcopy(info)
+        if force or now - getattr(self, "_reset_last_publish", float("-inf")) >= 1.0:
+            self._reset_last_publish = now
+            if getattr(self, "operator", None):
+                label = {"precheck": "检查夹爪和关节", "prepare": "准备控制器",
+                         "clear": "垂直拔出", "reset_pose": "移动到起始位姿",
+                         "verify": "验证复位结果", "ready": "复位完成"}.get(phase, phase)
+                self.operator.publish("resetting", reset=snapshot,
+                                      prompt=f"复位：{label} · {info['elapsed_seconds']:.1f} 秒")
+            if getattr(self, "recorder", None):
+                self.recorder.event("reset_progress", reset=snapshot)
+        return snapshot
+
+    def _reset_failure(self, name, reason, **details):
+        self._reset_progress(name, state="failed", force=True, reason=reason, **details)
+        errors = " ".join(f"{key}={value}" for key, value in details.items())
+        message = f"[reset_fatal] {name} {reason}; {errors}. 复位失败，未进入采集。"
+        print(message, flush=True)
+        raise RuntimeError(message)
+
     def reset(self, **kwargs):
+        """Hold the plug, clear vertically, then move to the sampled reset pose.
+
+        Gripper width is a plausibility precheck, not proof of a secure grasp.
+        Failed checks and motion stages always stop; RESET_STRICT/MANUAL_RESET
+        cannot override measured convergence or grant permission to collect.
         """
-        hold-grip 复位 (insert-only): 全程不松爪、保持夹持插头。
-        1. 恢复 + 精密参数
-        2. 保持夹持, 直上拔出插头到清空高度
-        3. 移到 RESET_POSE (插座上方+后退) + RANDOM_RESET 扰动
-        4. 掉插头检测 (gripper_pos 远低于握持值 -> 警告)
-        """
-        # 恢复（如有异常则触发安全恢复）
-        self._recover()
-        self._update_currpos()
-        self._send_pos_command(self.currpos)
-        time.sleep(0.1)
-
-        # 切换到精密控制参数
-        requests.post(self.url + "update_param", json=self.config.PRECISION_PARAM)
-
-        # !! 不张爪 !! 保持夹持插头 (hold-grip): 夹爪全程钳住; HoldGripperWrapper 也会把 episode
-        # 内的夹爪动作置 no-op, 所以这里不发任何夹爪指令 (旧版 _send_gripper_command(1.0) 会开爪丢插头)。
-
-        # 直上拔出插头到清空高度 (extract straight up: 保持当前 xy + 朝向, 仅升 z)
-        clear = copy.deepcopy(self.currpos)
-        clear[2] = max(float(clear[2]), float(self.config.TARGET_POSE[2] + 0.12))
-        clear_err = self.interpolate_move(clear, timeout=8.0, name="clear")
-        time.sleep(0.3)
-        self._require_reset_settled("clear", clear_err)
-
-        # 移到固定 RESET_POSE。Phase C 真机由操作者评估成功, 禁用随机 reset 以避免
-        # "每次复位更低/不同" 的可见漂移被 random xy/yaw 掩盖。
-        reset_pose = copy.deepcopy(np.asarray(self.config.RESET_POSE, dtype=float))
-        reset_err = self.interpolate_move(reset_pose, timeout=8.0, name="reset_pose")
-        time.sleep(0.3)
-        self._require_reset_settled("reset_pose", reset_err)
-
-        # 关节限位监控 (defense-in-depth, FIX 20260616): nullspace_stiffness=25 已防 j4 漂移,
-        # 但若 impedance 启动构型/q_d_nullspace 不安全, 在此提前预警, 避免 joint_velocity_violation 乱颤。
+        self._reset_started = time.monotonic()
+        self._step_commands = []
+        self._reset_phase_started = self._reset_started
+        self._reset_last_publish = float("-inf")
+        self.last_reset_info = dict(success=False, state="running", phases=[],
+                                    position_tolerance_m=RESET_POSITION_TOLERANCE,
+                                    rotation_tolerance_rad=RESET_ROTATION_TOLERANCE)
         try:
-            _q = np.array(requests.post(self.url + "getstate", timeout=5).json()["q"])
-            _LO = np.array([-2.7437, -1.7837, -2.9007, -3.0421, -2.8065, 0.5445, -3.0159])
-            _HI = np.array([2.7437, 1.7837, 2.9007, -0.1518, 2.8065, 4.5169, 3.0159])
-            _md = np.degrees(np.minimum(_q - _LO, _HI - _q))
-            _j = int(np.argmin(_md))
-            if _md[_j] < 12.0:
-                print("\n[!!! 关节逼近限位] j%d margin=%.1fdeg (<12). 乱颤风险! 请停下复位机械臂构型再继续。\n"
-                      % (_j + 1, _md[_j]), flush=True)
-        except Exception:
-            pass
-
-        # 不调用 super().reset(): 父类 reset 会再次 self.go_to_reset(), 导致同一轮 reset 执行两遍。
-        # 这里仅执行父类 reset 的非运动收尾逻辑，保持 teach-style 单一路径复位。
-        self.curr_path_length = 0
-        self.terminate = False
-        self._update_currpos()
-        obs = self._get_obs()
-        info = {"succeed": False}
-
-        # !! 不张爪 !! 保持夹持
-
-        # 掉插头检测: 握持值≈0.567, 远低于 0.40 视为插头滑脱/丢失
-        self._update_currpos()
-        held = float(np.asarray(self.curr_gripper_pos).reshape(-1)[0])
-        if held < 0.40:
-            print("\n[!!! 可能掉插头] gripper_pos=%.3f < 0.40 (握持≈0.567). "
-                  "请停下并重新抓取插头再继续。\n" % held, flush=True)
-
-        # 重置任务状态
-        self.success = False
-        self._insertion_started = False
-        self._contact_detected = False
-
-        self._update_currpos()
-        obs = self._get_obs()
-
-        return obs, info
-
-    def _require_reset_settled(self, name, err):
-        pos_err, rot_err = err
-        while RESET_STRICT and (pos_err > 0.012 or rot_err > 0.12):
-            msg = (
-                f"[reset_warn] {name} did not settle: "
-                f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}. "
-                "reposition/check contact before continuing."
-            )
-            print(msg, flush=True)
-            if not MANUAL_RESET:
-                fatal = msg.replace("[reset_warn]", "[reset_fatal]")
-                print(fatal, flush=True)
-                raise RuntimeError(fatal)
-            answer = input(
-                "\n[reset_manual_recovery] reset 未收敛。处理好插头/线缆/接触后按 Enter 重新检查；"
-                "输入 abort 退出 actor: "
-            ).strip().lower()
-            if answer in ("abort", "q", "quit", "exit"):
-                fatal = msg.replace("[reset_warn]", "[reset_fatal]")
-                print(fatal, flush=True)
-                raise RuntimeError(fatal)
+            # Read-only prechecks must precede recovery and every pose command.
+            self._reset_progress("precheck", force=True)
             self._update_currpos()
-            curr = np.asarray(self.currpos, dtype=float).reshape(7)
-            target = getattr(self, "_last_reset_goal", None)
-            if target is None:
+            self._require_plug_held()
+            self._require_joint_limit_margin()
+            self._reset_progress("precheck", state="passed", force=True,
+                                 gripper_position=float(np.asarray(self.curr_gripper_pos).reshape(-1)[0]),
+                                 gripper_check="plausible_width_only")
+
+            self._reset_progress("prepare", force=True)
+            self._recover()
+            self._update_currpos()
+            self._send_pos_command(self.currpos)
+            time.sleep(0.1)
+            self._robot_post("update_param", json=self.config.PRECISION_PARAM)
+            self._reset_progress("prepare", state="passed", force=True)
+
+            clear = compute_reset_clear_pose(self.currpos, self.config)
+            clear_err = self.interpolate_move(clear, timeout=8.0, name="clear")
+            self._require_reset_settled("clear", clear_err)
+
+            reset_pose = sample_reset_pose(self.config)
+            if getattr(self.config, "RANDOM_RESET", False):
                 print(
-                    "[reset_manual_recovery] missing reset target; accepting operator confirmation.",
+                    "[reset_random] "
+                    f"x={reset_pose[0]:.4f} y={reset_pose[1]:.4f} z={reset_pose[2]:.4f} "
+                    f"yaw={reset_pose[5]:.4f} "
+                    f"xy_range={float(self.config.RANDOM_XY_RANGE):.4f} "
+                    f"rz_range={float(self.config.RANDOM_RZ_RANGE):.4f}",
                     flush=True,
                 )
-                return
-            pos_err = float(np.linalg.norm(target[:3] - curr[:3]))
-            rot_err = float(np.linalg.norm(
-                (Rotation.from_quat(target[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
-            ))
-            print(
-                f"[reset_manual_recovery] {name} recheck target_z={target[2]:.4f} "
-                f"actual_z={curr[2]:.4f} pos_err={pos_err:.4f} rot_err={rot_err:.4f}",
-                flush=True,
-            )
+            else:
+                print("[reset_fixed] using configured RESET_POSE", flush=True)
+            reset_err = self.interpolate_move(reset_pose, timeout=8.0, name="reset_pose")
+            self._require_reset_settled("reset_pose", reset_err)
+
+            self._reset_progress("verify", force=True)
+            self._update_currpos()
+            self._require_joint_limit_margin()
+            self._require_plug_held()
+            # Do not call the base reset: it would move the robot for a second time.
+            self.curr_path_length = 0
+            self.terminate = False
+            self.success = False
+            self._insertion_started = False
+            self._contact_detected = False
+            self._check_recording_and_stop()
+            obs = self._get_obs()
+            self._check_recording_and_stop()
+            self._reset_progress("verify", state="passed", force=True)
+            self.last_reset_info.update(success=True, state="succeeded")
+            evidence = self._reset_progress("ready", state="passed", force=True)
+            return obs, {"succeed": False, "reset": evidence}
+        except BaseException as exc:
+            state = "cancelled" if type(exc).__name__ in ("StopRequested", "KeyboardInterrupt") else "failed"
+            phase = self.last_reset_info.get("phase", "precheck")
+            reason = self.last_reset_info.get("reason", str(exc))
+            try:
+                evidence = self._reset_progress(phase, state=state, force=True,
+                                                reason=reason, error=type(exc).__name__)
+                exc.reset_info = evidence
+            except Exception as publish_error:
+                # A recorder failure must not hide the original reset failure.
+                print(f"[reset_evidence_error] {publish_error}", flush=True)
+            raise
+
+    def _require_joint_limit_margin(self, q=None):
+        try:
+            if q is None:
+                q = self._robot_post("getstate").json()["q"]
+            margin_deg, joint_index, _margins = joint_limit_margin_degrees(q)
+        except Exception as exc:
+            # Preserve cancellation instead of relabelling it as a sensor failure.
+            if type(exc).__name__ == "StopRequested" or isinstance(exc, RobotStateUnavailable):
+                raise
+            fatal = f"[joint_limit_fatal] unable to read valid q for reset safety check: {exc}"
+            print(fatal, flush=True)
+            raise RuntimeError(fatal) from exc
+        if margin_deg < RESET_JOINT_LIMIT_MARGIN_DEG:
+            fatal = (f"[joint_limit_fatal] j{joint_index + 1} margin={margin_deg:.1f}deg "
+                     f"(<{RESET_JOINT_LIMIT_MARGIN_DEG:.1f}). reposition before continuing.")
+            print(fatal, flush=True)
+            raise RuntimeError(fatal)
+
+    def _require_plug_held(self):
+        if is_plug_held(self.curr_gripper_pos):
+            return
+        phase = (getattr(self, "last_reset_info", None) or {}).get("phase", "precheck")
+        outcome = "复位未执行" if phase == "precheck" else "复位已中止，未进入采集"
+        fatal = (f"[drop_plug_fatal] gripper_pos={np.asarray(self.curr_gripper_pos).tolist()}; "
+                 f"expected plausible held width {DROP_GRIPPER_MIN:.2f} <= value < "
+                 f"{RESET_GRIPPER_OPEN_THRESHOLD:.2f}. "
+                 f"夹爪全开、空夹或读数异常；先调整夹爪/插头，{outcome}。")
+        print(fatal, flush=True)
+        raise RuntimeError(fatal)
+
+    def _require_reset_settled(self, name, err):
+        pos_err, rot_err = (float(value) for value in err)
+        if (not np.isfinite(pos_err) or not np.isfinite(rot_err)
+                or pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE):
+            self._reset_failure(name, "not_converged", position_error_m=pos_err,
+                                rotation_error_rad=rot_err)
 
     # ----------------------------------------------------------
     # 辅助：线性插值移动
     # ----------------------------------------------------------
     def interpolate_move(self, goal: np.ndarray, timeout: float, name: str = "move"):
-        """
-        线性插值移动到目标位姿。
+        """Follow the existing bounded pose targets; require measured convergence.
 
-        Args:
-            goal:    6D [x,y,z,roll,pitch,yaw] 或 7D [x,y,z,quaternion]
-            timeout: 移动持续时间 (s)
+        HTTP deadlines, a monotonic motion deadline, and progress measured against
+        the best remaining error bound a frozen controller without speeding up
+        the robot or enlarging any positional/rotational command limits.
         """
+        goal = np.asarray(goal, dtype=float)
         if goal.shape == (6,):
             goal = np.concatenate([goal[:3], euler_2_quat(goal[3:])])
-
-        # Teach-aligned reset motion: each tick recompute delta from current pose and clamp
-        # the per-tick target jump. Re-sending a far fixed setpoint near the j5≈0 wrist
-        # singularity caused impedance ringing / 乱颤.
-        goal = np.asarray(goal, dtype=float).reshape(7)
+        goal = goal.reshape(7)
         self._last_reset_goal = goal.copy()
-        deadline = time.time() + float(timeout)
-        max_step = 0.0035          # m/tick, close to teach DEFAULT_MAX_STEP and actor z clip
-        max_rot_step = 0.05        # rad/tick, equals controller rotational_clip after our fix
-        pos_tol = 0.004
-        rot_tol = 0.04
-        while time.time() < deadline:
-            self._update_currpos()
-            curr = np.asarray(self.currpos, dtype=float).reshape(7)
-            dxyz = goal[:3] - curr[:3]
-            drot = (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
-            if np.linalg.norm(dxyz) < pos_tol and np.linalg.norm(drot) < rot_tol:
-                break
-            n = float(np.linalg.norm(dxyz))
-            if n > max_step:
-                dxyz = dxyz * (max_step / n)
-            nr = float(np.linalg.norm(drot))
-            if nr > max_rot_step:
-                drot = drot * (max_rot_step / nr)
-            nxt = curr.copy()
-            nxt[:3] = curr[:3] + dxyz
-            nxt[3:] = (Rotation.from_rotvec(drot) * Rotation.from_quat(curr[3:])).as_quat()
-            self._send_pos_command(nxt)
-            time.sleep(1.0 / self.hz)
-        # Hold the exact final target, then poll until the measured TCP catches up.
-        # The impedance controller can lag the last setpoint by >0.5s during vertical
-        # clear moves; treating that transient as fatal caused false reset failures.
-        for _ in range(max(1, int(0.5 * self.hz))):
-            self._send_pos_command(goal)
-            time.sleep(1.0 / self.hz)
-        settle_deadline = time.time() + 4.0
-        pos_err = float("inf")
-        rot_err = float("inf")
-        curr = None
-        while time.time() < settle_deadline:
-            self._update_currpos()
-            curr = np.asarray(self.currpos, dtype=float).reshape(7)
-            pos_err = float(np.linalg.norm(goal[:3] - curr[:3]))
-            rot_err = float(np.linalg.norm(
-                (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
+        max_step = 0.015
+        max_rot_step = 0.05
+        pos_tol, rot_tol = 0.004, 0.04
+        self._reset_progress(name, force=True, target_pose=goal.tolist())
+        try:
+            if not np.all(np.isfinite(goal)) or np.linalg.norm(goal[3:]) < 1e-9:
+                self._reset_failure(name, "invalid_target")
+            timing = (float(timeout), RESET_MOTION_EFFECTIVE_SPEED,
+                      RESET_MOTION_MAX_TIMEOUT, RESET_MOTION_SETTLE_TIMEOUT, float(self.hz))
+            if not all(np.isfinite(value) and value > 0 for value in timing):
+                self._reset_failure(name, "invalid_motion_timing")
+
+            def measured():
+                self._check_recording_and_stop()
+                self._update_currpos()
+                curr = np.asarray(self.currpos, dtype=float).reshape(7)
+                if not np.all(np.isfinite(curr)) or np.linalg.norm(curr[3:]) < 1e-9:
+                    self._reset_failure(name, "invalid_measured_pose")
+                self._require_plug_held()
+                self._require_joint_limit_margin(self.q)
+                pos_err = float(np.linalg.norm(goal[:3] - curr[:3]))
+                rot_err = float(np.linalg.norm(
+                    (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
+                ))
+                # Apply the same measured force/joint-speed limits as env.step.
+                for attr, limit_attr in (("currforce", "safety_force_max"), ("dq", "safety_dq_max")):
+                    if hasattr(self, attr) and hasattr(self, limit_attr):
+                        values = np.asarray(getattr(self, attr), dtype=float)
+                        value = float(np.linalg.norm(values) if attr == "currforce" else np.max(np.abs(values)))
+                        if not np.isfinite(value) or value > float(getattr(self, limit_attr)):
+                            self._reset_failure(name, "safety_limit", measurement=attr,
+                                                value=value, limit=float(getattr(self, limit_attr)))
+                return curr, pos_err, rot_err
+
+            def bounded_target(curr):
+                dxyz = goal[:3] - curr[:3]
+                drot = (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
+                distance, angle = float(np.linalg.norm(dxyz)), float(np.linalg.norm(drot))
+                if distance > max_step:
+                    dxyz *= max_step / distance
+                if angle > max_rot_step:
+                    drot *= max_rot_step / angle
+                nxt = curr.copy()
+                nxt[:3] += dxyz
+                nxt[3:] = (Rotation.from_rotvec(drot) * Rotation.from_quat(curr[3:])).as_quat()
+                return nxt
+
+            curr, pos_err, rot_err = measured()
+            adaptive_timeout = min(RESET_MOTION_MAX_TIMEOUT, max(
+                float(timeout), pos_err / RESET_MOTION_EFFECTIVE_SPEED + 5.0,
+                rot_err / (max_rot_step * float(self.hz) * 0.5) + 1.0,
             ))
-            if pos_err <= 0.012 and rot_err <= 0.12:
-                break
-            self._send_pos_command(goal)
-            print(
-                f"[reset_settle_wait] {name} target_z={goal[2]:.4f} actual_z={curr[2]:.4f} "
-                f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}",
-                flush=True,
-            )
-            time.sleep(0.2)
-        if curr is None:
-            self._update_currpos()
-            curr = np.asarray(self.currpos, dtype=float).reshape(7)
-            pos_err = float(np.linalg.norm(goal[:3] - curr[:3]))
-            rot_err = float(np.linalg.norm(
-                (Rotation.from_quat(goal[3:]) * Rotation.from_quat(curr[3:]).inv()).as_rotvec()
-            ))
-        print(
-            f"[reset_dbg] {name} target_z={goal[2]:.4f} actual_z={curr[2]:.4f} "
-            f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}",
-            flush=True,
-        )
-        if pos_err > 0.012 or rot_err > 0.12:
-            print(
-                f"[reset_warn] {name} did not settle: pos_err={pos_err:.4f} rot_err={rot_err:.4f}",
-                flush=True,
-            )
-        return pos_err, rot_err
+            started = time.monotonic()
+            deadline = started + adaptive_timeout
+            last_progress = started
+            best_pos_err, best_rot_err = pos_err, rot_err
+
+            def report(curr, pos_err, rot_err, *, state="moving", force=False):
+                return self._reset_progress(name, state=state, force=force,
+                    target_pose=goal.tolist(), actual_pose=curr.tolist(),
+                    position_error_m=pos_err, rotation_error_rad=rot_err,
+                    timeout_seconds=adaptive_timeout, no_progress_seconds=time.monotonic() - last_progress)
+
+            def check_progress(curr, pos_err, rot_err):
+                nonlocal last_progress, best_pos_err, best_rot_err
+                now = time.monotonic()
+                # Net improvement in either component counts, including when
+                # orientation converges before translation. Jitter does not.
+                if pos_err <= best_pos_err - 0.0005 or rot_err <= best_rot_err - 0.005:
+                    best_pos_err = min(best_pos_err, pos_err)
+                    best_rot_err = min(best_rot_err, rot_err)
+                    last_progress = now
+                report(curr, pos_err, rot_err)
+                if (now - last_progress >= RESET_STALL_TIMEOUT
+                        and (pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE)):
+                    self._reset_failure(name, "stalled", position_error_m=pos_err,
+                                        rotation_error_rad=rot_err,
+                                        no_progress_seconds=now - last_progress)
+
+            report(curr, pos_err, rot_err, force=True)
+            print(f"[reset_motion] {name} timeout={adaptive_timeout:.1f}s "
+                  f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}", flush=True)
+            while time.monotonic() < deadline:
+                curr, pos_err, rot_err = measured()
+                check_progress(curr, pos_err, rot_err)
+                if pos_err < pos_tol and rot_err < rot_tol:
+                    break
+                if (time.monotonic() - last_progress >= RESET_STALL_TIMEOUT
+                        and pos_err <= RESET_POSITION_TOLERANCE and rot_err <= RESET_ROTATION_TOLERANCE):
+                    break
+                self._send_pos_command(bounded_target(curr))
+                time.sleep(min(1.0 / self.hz, max(0.0, deadline - time.monotonic())))
+
+            curr, pos_err, rot_err = measured()
+            check_progress(curr, pos_err, rot_err)
+            exact_goal_allowed = pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
+            if not exact_goal_allowed and (pos_err > RESET_POSITION_TOLERANCE or rot_err > RESET_ROTATION_TOLERANCE):
+                self._reset_failure(name, "timeout", position_error_m=pos_err,
+                                    rotation_error_rad=rot_err, timeout_seconds=adaptive_timeout)
+
+            # Retain the existing short exact-goal hold only when already nearby.
+            hold_deadline = time.monotonic() + (0.5 if exact_goal_allowed else 0.0)
+            while time.monotonic() < hold_deadline:
+                self._send_pos_command(goal if pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
+                                       else bounded_target(curr))
+                time.sleep(min(1.0 / self.hz, max(0.0, hold_deadline - time.monotonic())))
+                curr, pos_err, rot_err = measured()
+                check_progress(curr, pos_err, rot_err)
+
+            settle_deadline = time.monotonic() + RESET_MOTION_SETTLE_TIMEOUT
+            while True:
+                curr, pos_err, rot_err = measured()
+                check_progress(curr, pos_err, rot_err)
+                if pos_err <= RESET_POSITION_TOLERANCE and rot_err <= RESET_ROTATION_TOLERANCE:
+                    report(curr, pos_err, rot_err, state="converged", force=True)
+                    print(f"[reset_dbg] {name} target_z={goal[2]:.4f} actual_z={curr[2]:.4f} "
+                          f"pos_err={pos_err:.4f} rot_err={rot_err:.4f}", flush=True)
+                    return pos_err, rot_err
+                if time.monotonic() >= settle_deadline:
+                    self._reset_failure(name, "not_converged", position_error_m=pos_err,
+                                        rotation_error_rad=rot_err, timeout_seconds=adaptive_timeout)
+                self._send_pos_command(goal if pos_err <= max_step * 1.5 and rot_err <= max_rot_step * 1.5
+                                       else bounded_target(curr))
+                time.sleep(min(0.2, max(0.0, settle_deadline - time.monotonic())))
+        except BaseException as exc:
+            if self.last_reset_info.get("state") not in ("failed", "cancelled"):
+                state = "cancelled" if type(exc).__name__ in ("StopRequested", "KeyboardInterrupt") else "failed"
+                self._reset_progress(name, state=state, force=True, reason=str(exc), error=type(exc).__name__)
+            raise
 
     # ----------------------------------------------------------
     # 复位到初始位姿（支持随机化）
@@ -286,7 +655,7 @@ class PlugInsertionEnv(FrankaEnv):
         """
         if joint_reset:
             print("[PlugInsertion] JOINT RESET triggered")
-            requests.post(self.url + "jointreset")
+            self._robot_post("jointreset")
             time.sleep(0.5)
 
         if self.randomreset:
@@ -306,4 +675,4 @@ class PlugInsertionEnv(FrankaEnv):
             self.interpolate_move(self.resetpos.copy(), timeout=3.0)
 
         # 切回合规模式（操作阶段使用）
-        requests.post(self.url + "update_param", json=self.config.COMPLIANCE_PARAM)
+        self._robot_post("update_param", json=self.config.COMPLIANCE_PARAM)

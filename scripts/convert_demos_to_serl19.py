@@ -23,7 +23,7 @@ DEMO source obs state (25,) f32 layout (empirically verified):
 images (3,128,128) u8 CHW for keys side_policy / wrist_1 / side_classifier
 
 TARGET (live observation_space, RunSetup-locked):
-    state           (1, 19) f32 = tcp_pose_euler(6)+tcp_vel(6)+tcp_force(3)+tcp_torque(3)+gripper(1)
+    state           (1, 19) f32 = gripper(1)+tcp_force(3)+tcp_pose_euler(6)+tcp_torque(3)+tcp_vel(6)
     side_policy     (1, 128, 128, 3) u8 (HWC, chunk dim=1)
     wrist_1         (1, 128, 128, 3) u8
     side_classifier (1, 128, 128, 3) u8
@@ -164,9 +164,10 @@ def convert_obs(obs, T_r_o_inv):
 
     gripper = np.array([detile_gripper(s)])                                   # (1,)
 
-    # (c) SERLObs flatten order from proprio_keys
+    # (c) SERLObsWrapper flattens gymnasium Dict keys alphabetically:
+    # gripper_pose, tcp_force, tcp_pose, tcp_torque, tcp_vel.
     state_vec = np.concatenate([
-        tcp_pose_euler, tcp_vel, tcp_force, tcp_torque, gripper
+        gripper, tcp_force, tcp_pose_euler, tcp_torque, tcp_vel
     ]).astype(np.float32)                                                     # (19,)
     assert state_vec.shape == (19,), state_vec.shape
 

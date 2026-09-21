@@ -26,10 +26,18 @@
 
 import argparse
 import os
+import sys
 import time
 from datetime import datetime
 
 import numpy as np
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_SCRIPT_DIR = os.path.dirname(SCRIPT_DIR)
+if PARENT_SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_SCRIPT_DIR)
+
+from fr3_joint_limits import FR3_LOWER_LIMITS, FR3_UPPER_LIMITS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 安全参数默认值 (来自 gello_fr3_desktop_follow.py)
@@ -45,9 +53,6 @@ DEFAULT_OUTPUT_DIR = "/tmp/gello_demos"
 # GELLO -> FR3 关节符号映射 (来自 gello_fr3_desktop_follow.py)
 DEFAULT_JOINT_SIGNS = [1, -1, 1, 1, 1, -1, 1]
 
-# FR3 关节限位
-FR3_LOWER_LIMITS = np.array([-2.8, -1.66, -2.8, -2.97, -2.8, 0.08, -2.8])
-FR3_UPPER_LIMITS = np.array([2.8, 1.66, 2.8, -0.17, 2.8, 3.65, 2.8])
 FR3_DEFAULT_JOINTS = np.array([0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0])
 
 

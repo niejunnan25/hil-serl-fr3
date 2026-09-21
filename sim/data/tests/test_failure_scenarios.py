@@ -1,6 +1,6 @@
 """A9: FailureScenarioGenerator 必须为 4 类失败各自产出 pkl 文件, 全 reward=0.
 
-复用 sim/data/gello_replay.py 的 replay_pure_fk 骨架产 25D state trajectory,
+复用 sim/data/gello_replay.py 的 replay_pure_fk 骨架产 live SERL19 state trajectory,
 然后扰动轨迹生成 failure cases。
 """
 import os
@@ -12,11 +12,11 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: 构造一个合成 demo (50 帧, 25D state + 7D action)
+# Fixtures: 构造一个合成 demo (50 帧, live SERL19 state + 7D action)
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def synthetic_demo():
-    """50 帧合成 demo: 25D gaussian state + 7D random action."""
+    """50 帧合成 demo: joint trajectory + gripper trajectory."""
     rng = np.random.default_rng(0)
     N = 50
     return {
@@ -73,7 +73,7 @@ def test_generator_produces_pkl_with_reward_zero(synthetic_demo, tmp_pkl_path, f
 
 
 # ---------------------------------------------------------------------------
-# 2) Schema 满足 contract (25D state, 7D action, transition keys)
+# 2) Schema 满足 contract (live SERL19 state, 7D action, transition keys)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("failure_class", [
     "mis_alignment", "angle_offset", "insufficient_force", "drop",
@@ -87,7 +87,7 @@ def test_generator_pkl_schema_matches_contract(synthetic_demo, tmp_pkl_path, fai
     method(synthetic_demo, output_path=tmp_pkl_path)
     loaded = _load_pkl(tmp_pkl_path)
     t = loaded[0]
-    # state 25D
+    # live flat state
     assert t["observations"]["state"].shape == (STATE_DIMS,)
     # action 7D
     assert t["actions"].shape == (7,)

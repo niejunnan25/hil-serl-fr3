@@ -2,7 +2,7 @@
 # =============================================================================
 # train_reward_classifier.sh — Train binary reward classifier for plug_insertion
 #
-# Wrapper around SERL's train_reward_classifier.py. Trains a ResNet-based
+# Wrapper around this repo's scripts/train_reward_classifier.py. Trains a ResNet-based
 # binary classifier on labeled positive/negative images to predict task
 # completion (reward = 1 if inserted, 0 otherwise).
 #
@@ -31,9 +31,6 @@ CONDA_ENV="${CONDA_ENV:-hilserl-fr3}"
 DATA_DIR="${SERL_FR3_ROOT}/data/classifier"
 OUTPUT_DIR="${SERL_FR3_ROOT}/classifier_ckpt"
 
-# Image keys matching config.py (side_classifier view)
-IMAGE_KEYS="side_classifier"
-
 # Training hyperparameters
 BATCH_SIZE=64
 EPOCHS=""
@@ -51,7 +48,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --image_keys)
-            IMAGE_KEYS="$2"
+            warn "--image_keys is ignored by the local PyTorch trainer; it trains from positive/negative image folders."
             shift 2
             ;;
         --batch_size)
@@ -72,7 +69,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --data_dir DIR        Classifier data directory (default: data/classifier/)"
             echo "  --output_dir DIR      Output checkpoint directory (default: classifier_ckpt/)"
-            echo "  --image_keys KEYS     Image observation keys (default: side_classifier)"
+            echo "  --image_keys KEYS     Accepted for legacy compatibility; ignored by local trainer"
             echo "  --batch_size N        Batch size (default: 64)"
             echo "  --epochs N            Number of training epochs (default: SERL default)"
             echo "  --lr RATE             Learning rate (default: 1e-3)"
@@ -145,7 +142,6 @@ if [ "$N_TOTAL" -eq 0 ]; then
 fi
 
 log "Data found: ${N_POSITIVE} positive, ${N_NEGATIVE} negative (${N_TOTAL} total)"
-info "Image keys: ${IMAGE_KEYS}"
 
 if [ "$N_POSITIVE" -lt 10 ] || [ "$N_NEGATIVE" -lt 10 ]; then
     warn "Very few training samples — consider collecting more data"
@@ -154,35 +150,12 @@ fi
 # ─── 4. Locate train_reward_classifier.py ───────────────────────────────────
 echo ""
 
-# Search for the training script in upstream SERL
-TRAIN_SCRIPT=""
-for candidate in \
-    "${SERL_FR3_ROOT}/upstream/hil-serl/serl_launcher/utils/train_reward_classifier.py" \
-    "${SERL_FR3_ROOT}/upstream/serl/serl_launcher/utils/train_reward_classifier.py"; do
-    if [ -f "$candidate" ]; then
-        TRAIN_SCRIPT="$candidate"
-        break
-    fi
-done
-
-if [ -z "$TRAIN_SCRIPT" ]; then
-    # Fallback: try to find it via import
-    TRAIN_SCRIPT=$(python -c "
-import serl_launcher.utils.train_reward_classifier as m
-print(m.__file__)
-" 2>/dev/null || echo "")
-
-    if [ -n "$TRAIN_SCRIPT" ] && [ -f "$TRAIN_SCRIPT" ]; then
-        log "Found via import: ${TRAIN_SCRIPT}"
-    else
-        err "train_reward_classifier.py not found"
-        info "Expected at: ${SERL_FR3_ROOT}/upstream/hil-serl/serl_launcher/utils/train_reward_classifier.py"
-        info "Ensure SERL is installed: pip install -e upstream/hil-serl/serl_launcher"
-        exit 1
-    fi
-else
-    log "Found: ${TRAIN_SCRIPT}"
+TRAIN_SCRIPT="${SERL_FR3_ROOT}/scripts/train_reward_classifier.py"
+if [ ! -f "$TRAIN_SCRIPT" ]; then
+    err "train_reward_classifier.py not found: ${TRAIN_SCRIPT}"
+    exit 1
 fi
+log "Found: ${TRAIN_SCRIPT}"
 
 # ─── 5. Create output directory ─────────────────────────────────────────────
 mkdir -p "$OUTPUT_DIR"
@@ -190,10 +163,9 @@ info "Output checkpoint dir: ${OUTPUT_DIR}"
 
 # ─── 6. Build training command ──────────────────────────────────────────────
 CMD_ARGS=(
-    --data_dir "${DATA_DIR}"
-    --output_dir "${OUTPUT_DIR}"
-    --image_keys ${IMAGE_KEYS}
-    --batch_size "${BATCH_SIZE}"
+    --data-dir "${DATA_DIR}"
+    --output-dir "${OUTPUT_DIR}"
+    --batch-size "${BATCH_SIZE}"
     --lr "${LEARNING_RATE}"
 )
 

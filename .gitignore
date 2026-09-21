@@ -1,17 +1,51 @@
-# Python
+# Python and generated package metadata
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
-# scratch / editor
+*.egg-info/
+.venv/
+venv/
+
+# Editor scratch and local backups
 *.bak*
 *.orig
 *.swp
 .DS_Store
+*.log
+*.tmp
 xbox_debug.csv
-# robot-desktop-only big trees (kept out of canonical; anchored so they never
-# match tracked source like sim/data/)
+/.codex_backups/
+/.gate*_backups/
+/.benchmarks/
+/.planning/
+/.jax_stack_snapshot_*.txt
+
+# Local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Pinned dependency checkouts are reconstructed from vendor/ patches
 /upstream/
-/classifier_ckpt/
-/classifier_data/
+
+# Robot datasets, learned weights, recordings and runtime output
+# Anchored patterns keep source folders such as sim/data tracked.
 /artifacts/
 /demos/
+/data/
+/classifier_data/
+/classifier_ckpt*/
+/experiments/**/runtime_runs/
+/experiments/**/calibration/**/*.png
+/experiments/**/calibration/**/*.npy
+/experiments/**/calibration/**/samples/
+/experiments/**/calibration/**/current_formal_checkerboard_pnp_*/
+/experiments/**/calibration/**/full_resolution_current_pnp_runs/
+
+# Native build output
+build/
+dist/
+CMakeFiles/
+CMakeCache.txt

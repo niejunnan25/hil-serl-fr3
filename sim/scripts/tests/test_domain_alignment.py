@@ -13,26 +13,30 @@ import pickle
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 @pytest.fixture
 def sim_pkl_path():
-    """A9 风格的 sim pkl (全 reward=0, 25D state, 3 image keys)."""
+    """A9 风格的 sim pkl (全 reward=0, live state, 3 image keys)."""
+    from sim.data.contract import IMAGE_SHAPE, STATE_DIMS
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "sim.pkl")
         rng = np.random.default_rng(0)
         N = 10
         transitions = []
         for i in range(N):
-            state = rng.normal(size=(25,)).astype(np.float32)
-            next_state = rng.normal(size=(25,)).astype(np.float32)
+            state = rng.normal(size=(STATE_DIMS,)).astype(np.float32)
+            next_state = rng.normal(size=(STATE_DIMS,)).astype(np.float32)
             action = rng.uniform(-1, 1, size=(7,)).astype(np.float32)
-            base = rng.integers(0, 256, size=(3, 128, 128), dtype=np.uint8)
+            base = rng.integers(0, 256, size=IMAGE_SHAPE, dtype=np.uint8)
             obs = {"state": state, "side_policy": base.copy(),
-                   "wrist_1": rng.integers(0, 256, size=(3, 128, 128), dtype=np.uint8),
+                   "wrist_1": rng.integers(0, 256, size=IMAGE_SHAPE, dtype=np.uint8),
                    "side_classifier": base.copy()}
             next_obs = {**obs, "state": next_state}
             transitions.append({
@@ -114,7 +118,7 @@ def test_cli_subprocess_runs(sim_pkl_path, mock_real_pkl_path):
     result = subprocess.run(
         [sys.executable, "-m", "sim.scripts.test_domain_alignment",
          "--sim", sim_pkl_path, "--real", mock_real_pkl_path],
-        cwd="/Users/tacyvan/Documents/Code/.claude/worktrees/wf_99662f87-b68-3/hilserl-fr3",
+        cwd=REPO_ROOT,
         capture_output=True, text=True, timeout=30,
     )
     # exit 0 = schema smoke pass

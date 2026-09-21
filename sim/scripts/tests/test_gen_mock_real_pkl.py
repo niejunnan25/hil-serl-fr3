@@ -1,4 +1,4 @@
-"""A11: gen_mock_real_pkl.py 必须产 SERL pkl 满足 3 键 image + 25D state + 80% 正样本.
+"""A11: gen_mock_real_pkl.py 必须产 SERL pkl 满足 3 键 image + live state + 80% 正样本.
 
 注意: 这是 MOCK 数据, 仅用于 A10/A12 schema smoke; 不是 real data。
 """
@@ -19,7 +19,7 @@ def tmp_output():
 
 
 # ---------------------------------------------------------------------------
-# 1) 产 pkl, 满足 schema (3 image keys, 25D state, 7D action, transition keys)
+# 1) 产 pkl, 满足 schema (3 image keys, live state, 7D action, transition keys)
 # ---------------------------------------------------------------------------
 def test_gen_mock_real_pkl_creates_valid_schema(tmp_output):
     from sim.scripts.gen_mock_real_pkl import generate_mock_real_pkl
@@ -47,7 +47,7 @@ def test_gen_mock_real_pkl_creates_valid_schema(tmp_output):
     assert "side_policy" in obs
     assert "wrist_1" in obs
     assert "side_classifier" in obs
-    # 25D state
+    # live flat state
     assert obs["state"].shape == (STATE_DIMS,)
     # image shape
     for k in ("side_policy", "wrist_1", "side_classifier"):

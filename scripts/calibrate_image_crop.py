@@ -46,7 +46,10 @@ import numpy as np
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.zed_capture import ZEDCapture
+from scripts.zed_capture import ZEDCapture, validate_zed_exposure
+
+
+DEFAULT_ZED_EXPOSURE = 32
 
 
 # ── Data types ────────────────────────────────────────────────────────────
@@ -92,7 +95,7 @@ class CameraConfig:
     name: str
     serial: str
     crop: Optional[CropRegion] = None
-    exposure: int = 10500
+    exposure: int = DEFAULT_ZED_EXPOSURE
 
 
 @dataclass
@@ -566,7 +569,8 @@ def parse_camera_arg(arg: str) -> CameraConfig:
         raise ValueError(f"Invalid camera format: {arg!r}. Expected name:serial[:exposure]")
     name = parts[0]
     serial = parts[1]
-    exposure = int(parts[2]) if len(parts) > 2 else 10500
+    exposure = int(parts[2]) if len(parts) > 2 else DEFAULT_ZED_EXPOSURE
+    exposure = validate_zed_exposure(exposure)
     return CameraConfig(name=name, serial=serial, exposure=exposure)
 
 
@@ -585,8 +589,8 @@ Examples:
            --camera side_classifier:36276705
 
   # With custom exposure
-  %(prog)s --camera wrist_1:13132609:10500 \\
-           --camera side_policy:36276705:13000
+  %(prog)s --camera wrist_1:13132609:32 \\
+           --camera side_policy:36276705:39
 
   # Load previous calibration
   %(prog)s --load calibration_data.json \\
@@ -599,7 +603,10 @@ Examples:
     parser.add_argument("--serial", help="Single camera serial number")
     parser.add_argument("--name", default="camera", help="Single camera name (default: camera)")
     parser.add_argument(
-        "--exposure", type=int, default=10500, help="Camera exposure (default: 10500)"
+        "--exposure",
+        type=int,
+        default=DEFAULT_ZED_EXPOSURE,
+        help=f"ZED exposure percent or -1 auto (default: {DEFAULT_ZED_EXPOSURE})",
     )
 
     # Multi-camera mode
@@ -638,8 +645,9 @@ Examples:
         for cam_arg in args.camera:
             cameras.append(parse_camera_arg(cam_arg))
     elif args.serial:
+        exposure = validate_zed_exposure(args.exposure)
         cameras.append(
-            CameraConfig(name=args.name, serial=args.serial, exposure=args.exposure)
+            CameraConfig(name=args.name, serial=args.serial, exposure=exposure)
         )
     else:
         parser.error("Specify --serial or at least one --camera")

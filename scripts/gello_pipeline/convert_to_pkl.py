@@ -23,7 +23,7 @@ pkl 格式: 一个 list，每个元素是一个 transition dict:
 
 转换流程:
   1. 加载 npz: joint_poses, gripper_states, timestamps
-  2. FK 转换: joints_to_cartesian_delta(q[t-1], q[t]) -> 6D delta
+  2. FK 转换: joints_to_cartesian_delta(q[t], q[t+1]) -> 6D delta
   3. 归一化 action: normalize_action(cartesian_delta, gripper) -> 7D [-1, 1]
   4. 构建 transitions list (含 next_observations)
   5. 过滤零动作 (norm(actions) > 0.0)
@@ -35,7 +35,7 @@ pkl 格式: 一个 list，每个元素是一个 transition dict:
 
 用法:
   python convert_to_pkl.py input.npz output.pkl
-  python convert_to_pkl.py input.npz output.pkl --pos-scale 0.1 --rpy-scale 0.2
+  python convert_to_pkl.py input.npz output.pkl --pos-scale 0.015 --rpy-scale 0.1
   python convert_to_pkl.py /tmp/gello_demos/ --output-dir /tmp/pkl_demos
   python convert_to_pkl.py /tmp/gello_demos/ --output-dir /tmp/pkl_demos --no-filter
 """
@@ -60,8 +60,8 @@ from normalize_action import normalize_action
 # ---------------------------------------------------------------------------
 # 默认参数
 # ---------------------------------------------------------------------------
-DEFAULT_POS_SCALE = 0.1    # xyz 归一化分母 (meters)
-DEFAULT_RPY_SCALE = 0.2    # roll/pitch/yaw 归一化分母 (radians)
+DEFAULT_POS_SCALE = 0.015  # xyz 归一化分母 (meters), EnvConfig.ACTION_SCALE[0]
+DEFAULT_RPY_SCALE = 0.1    # roll/pitch/yaw 归一化分母, EnvConfig.ACTION_SCALE[3]
 IMAGE_H = 128
 IMAGE_W = 128
 IMAGE_C = 3
@@ -150,14 +150,15 @@ def convert_npz_to_pkl_data(
     transitions = []
     num_filtered = 0
 
-    for i in range(N):
+    for i in range(N - 1):
+        action_index = i + 1
         # 过滤零动作: norm > 0.0 才保留
-        action = actions[i]
+        action = actions[action_index]
         if filter_zero_actions and np.linalg.norm(action) <= 0.0:
             num_filtered += 1
             continue
 
-        done = (i == N - 1)
+        done = (action_index == N - 1)
         mask = np.float32(1.0 - float(done))
 
         transition = {
@@ -166,8 +167,7 @@ def convert_npz_to_pkl_data(
                 "pixels": pixels.copy(),
             },
             "next_observations": {
-                # next_state: 最后一帧指向自身
-                "state": states[min(i + 1, N - 1)].copy(),
+                "state": states[action_index].copy(),
                 "pixels": pixels.copy(),
             },
             "actions": action.copy(),

@@ -9,6 +9,7 @@ Connects to the SERL franka_server (Flask HTTP bridge) and verifies:
 
 Usage:
     python scripts/verify_franka_server.py [--url http://127.0.0.2:5000/]
+    python scripts/verify_franka_server.py --live-motion  # sends motion/gripper commands
 
 Exit code 0 = all tests pass, 1 = at least one failure.
 """
@@ -311,6 +312,10 @@ def test_latency(base_url: str, r: Result) -> None:
         r.fail(label, str(exc))
 
 
+def should_test_command_endpoints(args: argparse.Namespace) -> bool:
+    return bool(args.live_motion and not args.skip_commands)
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -324,6 +329,11 @@ def main() -> None:
         "--skip-commands",
         action="store_true",
         help="Skip command endpoints (read-only verification)",
+    )
+    parser.add_argument(
+        "--live-motion",
+        action="store_true",
+        help="Allow POSTs to motion/gripper command endpoints. Default is read-only.",
     )
     parser.add_argument(
         "--skip-latency",
@@ -348,12 +358,12 @@ def main() -> None:
     print("[Phase 2] Read endpoints")
     test_read_endpoints(base_url, r)
 
-    # Phase 3: command endpoints (dry-run)
-    if not args.skip_commands:
-        print("[Phase 3] Command endpoints (dry-run)")
+    # Phase 3: command endpoints (live motion only)
+    if should_test_command_endpoints(args):
+        print("[Phase 3] Command endpoints (LIVE MOTION)")
         test_command_endpoints(base_url, r)
     else:
-        r.skip("command endpoints", "skipped by --skip-commands")
+        r.skip("command endpoints", "Command endpoints skipped by default; pass --live-motion to run them")
 
     # Phase 4: error handling
     print("[Phase 4] Error handling")

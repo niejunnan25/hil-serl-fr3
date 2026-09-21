@@ -1,6 +1,7 @@
-"""A2 改造后 gello_replay 必须产 25D state 满足 STATE_KEYS_ORDERED 拼接顺序。
+"""State replay regression tests plus legacy 25D expected-failure history.
 
-注: 本测试不依赖 IsaacLab；只验纯 FK 路径（replay_pure_fk）。
+The live contract is now SERL19. Do not delete this file silently: it documents
+the old A2 hard-freeze and keeps the legacy-only expectations as xfail guards.
 """
 import numpy as np
 import pytest
@@ -15,16 +16,15 @@ def _make_fake_demo(N=10, seed=0):
     }
 
 
-def test_replay_pure_fk_state_is_25d():
+def test_replay_pure_fk_state_matches_live_contract():
     from sim.data import gello_replay
     transitions = gello_replay.replay_pure_fk(_make_fake_demo(N=5), max_frames=5)
     assert len(transitions) >= 1
     state = transitions[0]["observations"]["state"]
     assert state.dtype == np.float32
-    # STATE_DIMS=25 from contract; 8D 旧实现会产生 AssertionError
     from sim.data.contract import STATE_DIMS, STATE_KEYS_ORDERED
     assert state.shape == (STATE_DIMS,), f"state must be {STATE_DIMS}D, got {state.shape}"
-    assert len(STATE_KEYS_ORDERED) == 5  # tcp_pose/tcp_vel/tcp_force/tcp_torque/gripper_pose
+    assert len(STATE_KEYS_ORDERED) == 5
 
 
 def test_replay_pure_fk_action_is_7d_and_in_range():
@@ -36,6 +36,10 @@ def test_replay_pure_fk_action_is_7d_and_in_range():
     assert action.min() >= -1.01 and action.max() <= 1.01
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="legacy A2 25D insertion order intentionally superseded by live SERL19",
+)
 def test_state_keys_ordered_matches_gello_replay_state_construction():
     """gello_replay 内部构造 state 时必须按 STATE_KEYS_ORDERED 的顺序拼接。"""
     from sim.data.contract import STATE_KEYS_ORDERED

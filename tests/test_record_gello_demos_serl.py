@@ -206,12 +206,13 @@ class FakeFrankaServer:
     def __init__(self, base_url: str = "http://127.0.0.2:5000"):
         self.base_url = base_url.rstrip("/")
         self.calls: list[tuple[str, dict]] = []
+        default_q = [0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0]
         self.state = {
-            "pose": [0.45, 0.0, 0.30, 0.0, 0.0, 0.0, 1.0],
+            "pose": fk_converter.forward_kinematics(np.array(default_q)).tolist(),
             "vel": [0.0] * 6,
             "force": [0.0] * 3,
             "torque": [0.0] * 3,
-            "q": [0.0, 0.0, 0.0, -1.571, 0.0, 1.571, 0.0],
+            "q": default_q,
             "dq": [0.0] * 7,
             "jacobian": [[0.0] * 7 for _ in range(6)],
             "gripper_pos": 0.04,
@@ -258,7 +259,8 @@ class TestModuleSurface:
             "DEFAULT_MAX_STEP", "DEFAULT_MAX_TOTAL_DELTA",
             "DEFAULT_MAX_TRACKING_ERROR", "DEFAULT_HZ",
             "DEFAULT_LEADER_SCALE", "DEFAULT_JOINT_SIGNS",
-            "DEFAULT_SERVER_URL", "FR3_LOWER_LIMITS", "FR3_UPPER_LIMITS",
+            "DEFAULT_SERVER_URL", "DEFAULT_FK_BIAS_LIMIT",
+            "FR3_LOWER_LIMITS", "FR3_UPPER_LIMITS",
         ):
             assert hasattr(rgds, name), f"missing public symbol: {name}"
 
@@ -387,6 +389,9 @@ def _live_namespace(out_dir: str, duration: float, **overrides) -> argparse.Name
         max_step=0.003,
         max_total_delta=0.03,
         max_tracking_error=0.08,
+        fk_bias_limit=rgds.DEFAULT_FK_BIAS_LIMIT,
+        max_cartesian_step=rgds.DEFAULT_MAX_CARTESIAN_STEP,
+        max_cartesian_rot_step=rgds.DEFAULT_MAX_CARTESIAN_ROT_STEP,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -471,6 +476,99 @@ class TestRecordedNPZSchema:
             uninstall_mock()
         data = np.load(fpath, allow_pickle=True)
         assert str(data["meta_server_url"]) == "http://127.0.0.2:5000/"
+
+    def test_live_mode_refuses_fk_bias_before_pose_command(self, tmp_path):
+        out_dir = tmp_path / "demos"
+        server = FakeFrankaServer()
+        server.state["pose"] = [9.0, 9.0, 9.0, 0.0, 0.0, 0.0, 1.0]
+        _install_gello(np.array([0.0] * 7 + [0.5]))
+        ns = _live_namespace(str(out_dir), duration=0.10)
+        try:
+            with patch.object(requests.Session, "post", side_effect=server.post):
+                fpath = rgds.run_recording(ns)
+        finally:
+            uninstall_mock()
+
+        assert fpath is None
+        assert "/pose" not in [route for route, _payload in server.calls]
+
+    def test_live_mode_sends_smoothed_command_fk_not_unsmoothed_target(self, tmp_path):
+        out_dir = tmp_path / "demos"
+        server = FakeFrankaServer()
+        _install_gello(np.array([0.0] * 7 + [0.5]))
+        ns = _live_namespace(
+            str(out_dir),
+            duration=0.20,
+            leader_scale=10.0,
+            max_step=0.003,
+            max_total_delta=10.0,
+            max_tracking_error=10.0,
+        )
+
+        gello_reads = [
+            np.array([0.0] * 7 + [0.5]),  # connect()
+            np.array([0.0] * 7 + [0.5]),  # raw0
+            np.array([0.004, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+            np.array([0.004, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+            np.array([0.004, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+        ]
+
+        try:
+            with patch.object(requests.Session, "post", side_effect=server.post):
+                with patch.object(rgds.GelloDevice, "read", side_effect=gello_reads):
+                    with patch.object(rgds, "check_max_step", return_value=(True, 0.04)):
+                        fpath = rgds.run_recording(ns)
+        finally:
+            uninstall_mock()
+
+        assert fpath is not None
+        pose_posts = [payload["arr"] for route, payload in server.calls if route == "/pose"]
+        assert len(pose_posts) >= 2, "test needs a nonzero second command"
+        data = np.load(fpath, allow_pickle=True)
+        command = data["command"][1]
+        unsmoothed_target = data["target"][1]
+        np.testing.assert_allclose(pose_posts[1], fk_converter.forward_kinematics(command), atol=1e-9)
+        assert not np.allclose(
+            pose_posts[1],
+            fk_converter.forward_kinematics(unsmoothed_target),
+            atol=1e-9,
+        )
+
+    def test_live_mode_aborts_before_pose_when_cartesian_step_exceeds_limit(self, tmp_path):
+        out_dir = tmp_path / "demos"
+        server = FakeFrankaServer()
+        _install_gello(np.array([0.0] * 7 + [0.5]))
+        ns = _live_namespace(
+            str(out_dir),
+            duration=0.20,
+            leader_scale=10.0,
+            max_step=0.003,
+            max_total_delta=10.0,
+            max_tracking_error=10.0,
+            max_cartesian_step=1e-12,
+        )
+
+        gello_reads = [
+            np.array([0.0] * 7 + [0.5]),  # connect()
+            np.array([0.0] * 7 + [0.5]),  # raw0
+            np.array([0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+            np.array([0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+            np.array([0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5]),
+        ]
+
+        try:
+            with patch.object(requests.Session, "post", side_effect=server.post):
+                with patch.object(rgds.GelloDevice, "read", side_effect=gello_reads):
+                    with patch.object(rgds, "check_max_step", return_value=(True, 0.01)):
+                        fpath = rgds.run_recording(ns)
+        finally:
+            uninstall_mock()
+
+        assert fpath is not None
+        data = np.load(fpath, allow_pickle=True)
+        assert str(data["meta_abort_reason"]).startswith("max_cartesian_step:")
+        pose_posts = [payload["arr"] for route, payload in server.calls if route == "/pose"]
+        assert len(pose_posts) == 1, "nonzero command must be rejected before a second /pose"
 
 
 # ---------------------------------------------------------------------------

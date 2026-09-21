@@ -28,6 +28,7 @@ if SCRIPTS not in sys.path:
 from gello_demo_recorder import (  # noqa: E402
     obs_state,
     normalize_action,
+    gripper_action_for_recording,
     image_to_obs,
     build_transitions,
     ACTION_SCALE,
@@ -79,6 +80,12 @@ class TestNormalizeAction:
     def test_gripper_passthrough_both_signs(self):
         assert normalize_action(np.zeros(3), np.zeros(3), 1.0)[6] == pytest.approx(1.0)
         assert normalize_action(np.zeros(3), np.zeros(3), -1.0)[6] == pytest.approx(-1.0)
+
+    def test_hold_grip_action_for_insert_only_demos(self):
+        assert gripper_action_for_recording(True, hold_grip_action=0.0) == pytest.approx(0.0)
+        assert gripper_action_for_recording(False, hold_grip_action=0.0) == pytest.approx(0.0)
+        assert gripper_action_for_recording(True, hold_grip_action=None) == pytest.approx(-1.0)
+        assert gripper_action_for_recording(False, hold_grip_action=None) == pytest.approx(1.0)
 
     def test_action_scale_constant_matches_contract(self):
         np.testing.assert_allclose(

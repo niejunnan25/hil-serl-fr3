@@ -34,7 +34,7 @@ pkl 格式: 一个 list，每个元素是一个 transition dict:
 
 转换流程:
   1. 加载 npz: joint_poses, gripper_states, timestamps
-  2. FK 转换: joints_to_cartesian_delta(q[t-1], q[t]) -> 6D delta
+  2. FK 转换: joints_to_cartesian_delta(q[t], q[t+1]) -> 6D delta
   3. 归一化 action: normalize_action(cartesian_delta, gripper) -> 7D [-1, 1]
      ⚠️ 默认 pos_scale=0.015, rpy_scale=0.1，与 EnvConfig.ACTION_SCALE 对齐
   4. 构建 transitions list (含 next_observations)
@@ -233,14 +233,15 @@ def convert_npz_to_pkl_data(
     transitions = []
     num_filtered = 0
 
-    for i in range(N):
+    for i in range(N - 1):
+        action_index = i + 1
         # 过滤零动作: norm > 0.0 才保留
-        action = actions[i]
+        action = actions[action_index]
         if filter_zero_actions and np.linalg.norm(action) <= 0.0:
             num_filtered += 1
             continue
 
-        done = (i == N - 1)
+        done = (action_index == N - 1)
         mask = np.float32(1.0 - float(done))
 
         # 每帧独立加载图像 (实际图像或占位)
@@ -252,9 +253,8 @@ def convert_npz_to_pkl_data(
                 "pixels": pixels_i.copy(),
             },
             "next_observations": {
-                # next_state: 最后一帧指向自身
-                "state": states[min(i + 1, N - 1)].copy(),
-                "pixels": load_pixels(min(i + 1, N - 1)).copy(),
+                "state": states[action_index].copy(),
+                "pixels": load_pixels(action_index).copy(),
             },
             "actions": action.copy(),
             "rewards": np.float32(0.0),

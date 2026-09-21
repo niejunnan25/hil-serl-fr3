@@ -115,10 +115,11 @@ def test_state_keys_order_check_uses_state_keys_ordered(monkeypatch):
     contract_mod.STATE_KEYS_ORDERED = tuple(reversed(original))
     try:
         from sim.scripts.verify_sim_data import verify_state_keys_order
-        # 构造一个 25D state, 但 verify 函数应该 assert 顺序 (用 STATE_KEYS_ORDERED 拼接)
+        # 构造一个 live state, 但 verify 函数应该 assert 顺序 (用 STATE_KEYS_ORDERED 拼接)
         # 此处只验: 函数 import 了 STATE_KEYS_ORDERED
-        result = verify_state_keys_order(np.zeros(25, dtype=np.float32))
-        # 倒序 STATE_KEYS_ORDERED 仍可正确拼接 25D (因为每个 key dim 一样), 但 order 检查应通过
+        from sim.data.contract import STATE_DIMS
+        result = verify_state_keys_order(np.zeros(STATE_DIMS, dtype=np.float32))
+        # 倒序 STATE_KEYS_ORDERED 仍可正确拼接同维 state, 但 order 检查应通过
         # 关键验证: 我们的 verify_state_keys_order 用了 STATE_KEYS_ORDERED 拼接, 而非简单 sum
         assert isinstance(result, bool)
     finally:

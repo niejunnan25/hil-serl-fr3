@@ -1,0 +1,547 @@
+diff --git a/examples/train_bc.py b/examples/train_bc.py
+index a92e26fdccc04bff1e50dc4eb00352b7e31a3a81..36e95160bd910ebead97805d032f2c6e84c746ab 100644
+--- a/examples/train_bc.py
++++ b/examples/train_bc.py
+@@ -150,7 +150,7 @@ def main(_):
+     # replicate agent across devices
+     # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
+     bc_agent: BCAgent = jax.device_put(
+-        jax.tree_map(jnp.array, bc_agent), sharding.replicate()
++        jax.tree_util.tree_map(jnp.array, bc_agent), sharding.replicate()
+     )
+ 
+     if not eval_mode:
+diff --git a/examples/train_hgdagger.py b/examples/train_hgdagger.py
+index ced81c7ead2383b37e2fd6d055a63670743ffc29..69f46e526f474cfd3c93049c51d53ae3373a90d6 100644
+--- a/examples/train_hgdagger.py
++++ b/examples/train_hgdagger.py
+@@ -362,7 +362,7 @@ def main(_):
+     # replicate agent across devices
+     # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
+     agent: BCAgent = jax.device_put(
+-        jax.tree_map(jnp.array, agent), sharding.replicate()
++        jax.tree_util.tree_map(jnp.array, agent), sharding.replicate()
+     )
+ 
+     if FLAGS.learner:
+diff --git a/examples/train_rlpd.py b/examples/train_rlpd.py
+index 6b33492097a3e2d2790f105028a9289b5a17ebdd..ba645187fbd44131bb2b848c0ea7104de6bcdb32 100644
+--- a/examples/train_rlpd.py
++++ b/examples/train_rlpd.py
+@@ -413,7 +413,7 @@ def main(_):
+     # replicate agent across devices
+     # need the jnp.array to avoid a bug where device_put doesn't recognize primitives
+     agent = jax.device_put(
+-        jax.tree_map(jnp.array, agent), sharding.replicate()
++        jax.tree_util.tree_map(jnp.array, agent), sharding.replicate()
+     )
+ 
+     if FLAGS.checkpoint_path is not None and os.path.exists(FLAGS.checkpoint_path):
+diff --git a/serl_launcher/serl_launcher/agents/continuous/sac.py b/serl_launcher/serl_launcher/agents/continuous/sac.py
+index 451fb19c930e471bf2a519508404b7825c8cc1b7..f2eb6bbbbafaad70bfef5f6314274ed6074d4ac0 100644
+--- a/serl_launcher/serl_launcher/agents/continuous/sac.py
++++ b/serl_launcher/serl_launcher/agents/continuous/sac.py
+@@ -18,6 +18,25 @@ from serl_launcher.networks.mlp import MLP
+ from serl_launcher.utils.train_utils import _unpack
+ 
+ 
++def _resolve_encoder_image_size(encoder_image_size, observations, image_keys):
++    """Keep the historical resize unless a matching input size is explicit."""
++    if encoder_image_size is None:
++        return (128, 128)
++    if (not isinstance(encoder_image_size, (tuple, list))
++            or len(encoder_image_size) != 2
++            or any(type(size) is not int or size <= 0 for size in encoder_image_size)):
++        raise ValueError("encoder_image_size must contain two positive integers (height, width)")
++    image_size = tuple(encoder_image_size)
++    for image_key in image_keys:
++        shape = tuple(getattr(observations.get(image_key), "shape", ()))
++        if len(shape) < 3 or shape[-3:-1] != image_size:
++            raise ValueError(
++                f"Sample policy image {image_key!r} has shape {shape}; "
++                f"encoder_image_size requires spatial shape {image_size}"
++            )
++    return image_size
++
++
+ class SACAgent(flax.struct.PyTreeNode):
+     """
+     Online actor-critic supporting several different algorithms depending on configuration:
+@@ -304,7 +323,8 @@ class SACAgent(flax.struct.PyTreeNode):
+             loss_fns[key] = lambda params, rng: (0.0, {})
+ 
+         new_state, info = self.state.apply_loss_fns(
+-            loss_fns, pmap_axis=pmap_axis, has_aux=True
++            loss_fns, pmap_axis=pmap_axis, has_aux=True,
++            optimizer_names=(networks_to_update if self.config.get("selective_optimizer_updates", False) else None),
+         )
+ 
+         # Update target network (if requested)
+@@ -454,12 +474,15 @@ class SACAgent(flax.struct.PyTreeNode):
+         temperature_init: float = 1.0,
+         image_keys: Iterable[str] = ("image",),
+         augmentation_function: Optional[callable] = None,
++        encoder_image_size: Optional[Tuple[int, int]] = None,
+         **kwargs,
+     ):
+         """
+         Create a new pixel-based agent, with no encoders.
+         """
+ 
++        image_keys = tuple(image_keys)
++        image_size = _resolve_encoder_image_size(encoder_image_size, observations, image_keys)
+         policy_network_kwargs["activate_final"] = True
+         critic_network_kwargs["activate_final"] = True
+ 
+@@ -471,6 +494,7 @@ class SACAgent(flax.struct.PyTreeNode):
+                     pooling_method="spatial_learned_embeddings",
+                     num_spatial_blocks=8,
+                     bottleneck_dim=256,
++                    image_size=image_size,
+                     name=f"encoder_{image_key}",
+                 )
+                 for image_key in image_keys
+@@ -483,6 +507,7 @@ class SACAgent(flax.struct.PyTreeNode):
+ 
+             pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
+                 pre_pooling=True,
++                image_size=image_size,
+                 name="pretrained_encoder",
+             )
+             encoders = {
+@@ -545,6 +570,7 @@ class SACAgent(flax.struct.PyTreeNode):
+             critic_subsample_size=critic_subsample_size,
+             image_keys=image_keys,
+             augmentation_function=augmentation_function,
++            encoder_image_size=image_size,
+             **kwargs,
+         )
+ 
+diff --git a/serl_launcher/serl_launcher/common/common.py b/serl_launcher/serl_launcher/common/common.py
+index a31b79b39523485d2704aff0df72eace70820821..80e2e88253a0ba6e7526289e0672c97e5c8d0706 100644
+--- a/serl_launcher/serl_launcher/common/common.py
++++ b/serl_launcher/serl_launcher/common/common.py
+@@ -22,7 +22,7 @@ def shard_batch(batch, sharding):
+         batch: A pytree of arrays.
+         sharding: A jax Sharding object with shape (num_devices,).
+     """
+-    return jax.tree_map(
++    return jax.tree_util.tree_map(
+         lambda x: jax.device_put(
+             x, sharding.reshape(sharding.shape[0], *((1,) * (x.ndim - 1)))
+         ),
+@@ -116,7 +116,7 @@ class JaxRLTrainState(struct.PyTreeNode):
+ 
+     @staticmethod
+     def _tx_tree_map(*args, **kwargs):
+-        return jax.tree_map(
++        return jax.tree_util.tree_map(
+             *args,
+             is_leaf=lambda x: isinstance(x, optax.GradientTransformation),
+             **kwargs,
+@@ -129,17 +129,35 @@ class JaxRLTrainState(struct.PyTreeNode):
+ 
+             new_target_params = tau * params + (1 - tau) * target_params
+         """
+-        new_target_params = jax.tree_map(
++        new_target_params = jax.tree_util.tree_map(
+             lambda p, tp: p * tau + tp * (1 - tau), self.params, self.target_params
+         )
+         return self.replace(target_params=new_target_params)
+ 
+-    def apply_gradients(self, *, grads: Any) -> "JaxRLTrainState":
++    def apply_gradients(self, *, grads: Any, optimizer_names=None) -> "JaxRLTrainState":
+         """
+         Only difference from flax's TrainState is that `grads` must have
+         `self.txs` as a tree prefix (i.e. where `self.txs` has a leaf, `grads`
+         has a subtree with the same structure as `self.params`.)
+         """
++        if optimizer_names is not None:
++            if (not isinstance(self.txs, Mapping) or not isinstance(self.opt_states, Mapping)
++                    or not optimizer_names or not set(optimizer_names).issubset(self.txs)):
++                raise ValueError("Selected optimizers must be a nonempty subset of named optimizers")
++            # A zero gradient still advances Adam momentum and its clock. Do
++            # not call inactive optimizers at all. Selected gradients may touch
++            # shared parameters; restricting them by parameter name is wrong.
++            selected = {name: self.txs[name].update(grads[name], self.opt_states[name], self.params)
++                        for name in sorted(optimizer_names)}
++            updates = jax.tree_util.tree_map(
++                lambda *xs: jnp.sum(jnp.array(xs), axis=0),
++                *(value[0] for value in selected.values()))
++            replacements = {name: value[1] for name, value in selected.items()}
++            new_opt_states = (self.opt_states.copy(add_or_replace=replacements)
++                              if isinstance(self.opt_states, flax.core.FrozenDict)
++                              else {**self.opt_states, **replacements})
++            return self.replace(step=self.step + 1,
++                                params=optax.apply_updates(self.params, updates), opt_states=new_opt_states)
+         updates_and_new_states = self._tx_tree_map(
+             lambda tx, opt_state, grad: tx.update(grad, opt_state, self.params),
+             self.txs,
+@@ -159,7 +177,7 @@ class JaxRLTrainState(struct.PyTreeNode):
+         )
+ 
+         # apply all the updates additively
+-        updates_acc = jax.tree_map(
++        updates_acc = jax.tree_util.tree_map(
+             lambda *xs: jnp.sum(jnp.array(xs), axis=0), *updates_flat
+         )
+         new_params = optax.apply_updates(self.params, updates_acc)
+@@ -169,7 +187,7 @@ class JaxRLTrainState(struct.PyTreeNode):
+         )
+ 
+     def apply_loss_fns(
+-        self, loss_fns: Any, pmap_axis: str = None, has_aux: bool = False
++        self, loss_fns: Any, pmap_axis: str = None, has_aux: bool = False, optimizer_names=None
+     ) -> Union["JaxRLTrainState", Tuple["JaxRLTrainState", Any]]:
+         """
+         Convenience method to compute gradients based on `self.params` and apply
+@@ -201,7 +219,7 @@ class JaxRLTrainState(struct.PyTreeNode):
+         rngs = jax.tree_util.tree_unflatten(treedef, rngs)
+ 
+         # compute gradients
+-        grads_and_aux = jax.tree_map(
++        grads_and_aux = jax.tree_util.tree_map(
+             lambda loss_fn, rng: jax.grad(loss_fn, has_aux=has_aux)(self.params, rng),
+             loss_fns,
+             rngs,
+@@ -215,11 +233,11 @@ class JaxRLTrainState(struct.PyTreeNode):
+             grads_and_aux = jax.lax.pmean(grads_and_aux, axis_name=pmap_axis)
+ 
+         if has_aux:
+-            grads = jax.tree_map(lambda _, x: x[0], loss_fns, grads_and_aux)
+-            aux = jax.tree_map(lambda _, x: x[1], loss_fns, grads_and_aux)
+-            return self.apply_gradients(grads=grads), aux
++            grads = jax.tree_util.tree_map(lambda _, x: x[0], loss_fns, grads_and_aux)
++            aux = jax.tree_util.tree_map(lambda _, x: x[1], loss_fns, grads_and_aux)
++            return self.apply_gradients(grads=grads, optimizer_names=optimizer_names), aux
+         else:
+-            return self.apply_gradients(grads=grads_and_aux)
++            return self.apply_gradients(grads=grads_and_aux, optimizer_names=optimizer_names)
+ 
+     @classmethod
+     def create(
+diff --git a/serl_launcher/serl_launcher/data/data_store.py b/serl_launcher/serl_launcher/data/data_store.py
+index 9f4f90dc0ae72dc0419e38256cda0c1a7cf7d5ae..4a145f13e122871770f52b3eddd2db635864c939 100644
+--- a/serl_launcher/serl_launcher/data/data_store.py
++++ b/serl_launcher/serl_launcher/data/data_store.py
+@@ -55,11 +55,44 @@ class MemoryEfficientReplayBufferDataStore(MemoryEfficientReplayBuffer, DataStor
+         )
+         DataStoreBase.__init__(self, capacity)
+         self._lock = Lock()
++        self._previous_raw_position = None
++
++    @staticmethod
++    def _raw_position(data_dict):
++        """A full raw ID identifies both the collection attempt and real step."""
++        info = data_dict.get("infos")
++        raw_id = info.get("raw_transition_id") if isinstance(info, dict) else None
++        if not isinstance(raw_id, str):
++            return None
++        parent, separator, step = raw_id.rpartition("/")
++        if not separator or not parent or not step.isdecimal():
++            return None
++        return parent, int(step)
+ 
+     # ensure thread safety
+-    def insert(self, *args, **kwargs):
++    def insert(self, data_dict):
+         with self._lock:
+-            super(MemoryEfficientReplayBufferDataStore, self).insert(*args, **kwargs)
++            position = self._raw_position(data_dict)
++            previous = self._previous_raw_position
++            if (position is None or previous is None or position[0] != previous[0]
++                    or position[1] != previous[1] + 1):
++                # Resets, sparse interventions and replayed credit are not
++                # adjacent frames. Seed this sample's actual observation stack
++                # without inventing a terminal verdict or changing its targets.
++                self._first = True
++            if self._first and self._insert_index + self._num_stack >= self._capacity:
++                # Sampling reconstructs a stack from contiguous array slots,
++                # so a newly seeded observation stack must not straddle the
++                # ring's end. Leave the unused tail unsampleable and seed at 0.
++                self._is_correct_index[self._insert_index:] = False
++                self._insert_index = 0
++            try:
++                super(MemoryEfficientReplayBufferDataStore, self).insert(data_dict)
++            except BaseException:
++                self._previous_raw_position = None
++                self._first = True
++                raise
++            self._previous_raw_position = position
+ 
+     # ensure thread safety
+     def sample(self, *args, **kwargs):
+diff --git a/serl_launcher/serl_launcher/data/dataset.py b/serl_launcher/serl_launcher/data/dataset.py
+index 5fff673c58362030c84bad9c441c5924af7a35c1..7225f19092ddd0da0136ac8aa911ede5aebad46e 100644
+--- a/serl_launcher/serl_launcher/data/dataset.py
++++ b/serl_launcher/serl_launcher/data/dataset.py
+@@ -118,7 +118,7 @@ class Dataset(object):
+                 return (
+                     rng,
+                     indx.max(),
+-                    jax.tree_map(lambda d: jnp.take(d, indx, axis=0), src),
++                    jax.tree_util.tree_map(lambda d: jnp.take(d, indx, axis=0), src),
+                 )
+ 
+             self._sample_jax = _sample_jax
+diff --git a/serl_launcher/serl_launcher/networks/reward_classifier.py b/serl_launcher/serl_launcher/networks/reward_classifier.py
+index 4af403a663f12f5e8bf738af8eb886ad0f750256..0397025e34ff6322f5e637ecd87d6d3f89eb3198 100644
+--- a/serl_launcher/serl_launcher/networks/reward_classifier.py
++++ b/serl_launcher/serl_launcher/networks/reward_classifier.py
+@@ -114,7 +114,7 @@ def create_classifier(
+     with open(file_path, "rb") as f:
+         encoder_params = pkl.load(f)
+             
+-    param_count = sum(x.size for x in jax.tree_leaves(encoder_params))
++    param_count = sum(x.size for x in jax.tree_util.tree_leaves(encoder_params))
+     print(
+         f"Loaded {param_count/1e6}M parameters from ResNet-10 pretrained on ImageNet-1K"
+     )
+diff --git a/serl_launcher/serl_launcher/utils/launcher.py b/serl_launcher/serl_launcher/utils/launcher.py
+index 9f0f2c4a7e296fa48a9bc6733dd51781750f728d..37e78b17c8d077dda40dcb4ce902a08aa6216b92 100644
+--- a/serl_launcher/serl_launcher/utils/launcher.py
++++ b/serl_launcher/serl_launcher/utils/launcher.py
+@@ -56,12 +56,14 @@ def make_sac_pixel_agent(
+     reward_bias=0.0,
+     target_entropy=None,
+     discount=0.97,
++    encoder_image_size=None,
+ ):
+     agent = SACAgent.create_pixels(
+         jax.random.PRNGKey(seed),
+         sample_obs,
+         sample_action,
+         encoder_type=encoder_type,
++        encoder_image_size=encoder_image_size,
+         use_proprio=True,
+         image_keys=image_keys,
+         policy_kwargs={
+diff --git a/serl_launcher/serl_launcher/utils/train_utils.py b/serl_launcher/serl_launcher/utils/train_utils.py
+index 6af2e1fea5c0b4e3b4eb924049b6cab0cca0605e..19082e8c78a26a85ec63c9f6c95802b6d14c2e63 100644
+--- a/serl_launcher/serl_launcher/utils/train_utils.py
++++ b/serl_launcher/serl_launcher/utils/train_utils.py
+@@ -142,7 +142,7 @@ def load_resnet10_params(agent, image_keys=("image",), public=True):
+         with open(file_path, "rb") as f:
+             encoder_params = pkl.load(f)
+ 
+-    param_count = sum(x.size for x in jax.tree_leaves(encoder_params))
++    param_count = sum(x.size for x in jax.tree_util.tree_leaves(encoder_params))
+     print(
+         f"Loaded {param_count/1e6}M parameters from ResNet-10 pretrained on ImageNet-1K"
+     )
+diff --git a/serl_launcher/serl_launcher/vision/data_augmentations.py b/serl_launcher/serl_launcher/vision/data_augmentations.py
+index 84315673ee67d1c10b86b9ef1a7209ba2db8c0ad..330ae4f1c4693e59a0eecb101e6524f3f0e4edeb 100644
+--- a/serl_launcher/serl_launcher/vision/data_augmentations.py
++++ b/serl_launcher/serl_launcher/vision/data_augmentations.py
+@@ -175,7 +175,7 @@ def hsv_to_rgb(h, s, v):
+ 
+ 
+ def adjust_brightness(rgb_tuple, delta):
+-    return jax.tree_map(lambda x: x + delta, rgb_tuple)
++    return jax.tree_util.tree_map(lambda x: x + delta, rgb_tuple)
+ 
+ 
+ def adjust_contrast(image, factor):
+@@ -183,7 +183,7 @@ def adjust_contrast(image, factor):
+         mean = jnp.mean(channel, axis=(-2, -1), keepdims=True)
+         return factor * (channel - mean) + mean
+ 
+-    return jax.tree_map(_adjust_contrast_channel, image)
++    return jax.tree_util.tree_map(_adjust_contrast_channel, image)
+ 
+ 
+ def adjust_saturation(h, s, v, factor):
+@@ -262,7 +262,7 @@ def color_transform(
+ 
+         def cond_fn(args, i):
+             def clip(args):
+-                return jax.tree_map(lambda arg: jnp.clip(arg, 0.0, 1.0), args)
++                return jax.tree_util.tree_map(lambda arg: jnp.clip(arg, 0.0, 1.0), args)
+ 
+             out = jax.lax.cond(
+                 should_apply & should_apply_color & (i == idx),
+@@ -281,7 +281,7 @@ def color_transform(
+     random_hue_cond = _make_cond(_random_hue, idx=3)
+ 
+     def _color_jitter(x):
+-        rgb_tuple = tuple(jax.tree_map(jnp.squeeze, jnp.split(x, 3, axis=-1)))
++        rgb_tuple = tuple(jax.tree_util.tree_map(jnp.squeeze, jnp.split(x, 3, axis=-1)))
+         if shuffle:
+             order = jax.random.permutation(perm_rng, jnp.arange(4, dtype=jnp.int32))
+         else:
+diff --git a/serl_launcher/serl_launcher/wrappers/chunking.py b/serl_launcher/serl_launcher/wrappers/chunking.py
+index 1cbb3fb0d6c906ab4d15595e6d92282b7bcbc898..0ef3ed73d91aaad11afc3f332ee67f47c208b388 100644
+--- a/serl_launcher/serl_launcher/wrappers/chunking.py
++++ b/serl_launcher/serl_launcher/wrappers/chunking.py
+@@ -9,7 +9,7 @@ import numpy as np
+ 
+ def stack_obs(obs):
+     dict_list = {k: [dic[k] for dic in obs] for k in obs[0]}
+-    return jax.tree_map(
++    return jax.tree_util.tree_map(
+         lambda x: np.stack(x), dict_list, is_leaf=lambda x: isinstance(x, list)
+     )
+ 
+diff --git a/serl_launcher/serl_launcher/wrappers/remap.py b/serl_launcher/serl_launcher/wrappers/remap.py
+index 9a986d74c00332f9f868ba1b3c33b0a762134a1d..4a70607e84ab2b0f7aedba9f4e5a27711fb0773b 100644
+--- a/serl_launcher/serl_launcher/wrappers/remap.py
++++ b/serl_launcher/serl_launcher/wrappers/remap.py
+@@ -31,4 +31,4 @@ class RemapWrapper(gym.ObservationWrapper):
+             raise TypeError(f"Unsupported type {type(new_structure)}")
+ 
+     def observation(self, observation):
+-        return jax.tree_map(lambda x: observation[x], self.new_structure)
++        return jax.tree_util.tree_map(lambda x: observation[x], self.new_structure)
+diff --git a/serl_robot_infra/franka_env/__init__.py b/serl_robot_infra/franka_env/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/serl_robot_infra/franka_env/envs/franka_env.py b/serl_robot_infra/franka_env/envs/franka_env.py
+index 993c1b258f7132897aa8275503705c74119c6f00..2bbd07803ff6eff5616a2cbc2bf5afd6e67c9359 100644
+--- a/serl_robot_infra/franka_env/envs/franka_env.py
++++ b/serl_robot_infra/franka_env/envs/franka_env.py
+@@ -75,6 +75,17 @@ class DefaultEnvConfig:
+     JOINT_RESET_PERIOD: int = 0
+ 
+ 
++def _env_flag(name: str, default: str = "0") -> bool:
++    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
++
++
++def _env_float(name: str, default: float) -> float:
++    try:
++        return float(os.environ.get(name, str(default)))
++    except (TypeError, ValueError):
++        return float(default)
++
++
+ ##############################################################################
+ 
+ 
+@@ -101,7 +112,21 @@ class FrankaEnv(gym.Env):
+         self.resetpos = np.concatenate(
+             [config.RESET_POSE[:3], euler_2_quat(config.RESET_POSE[3:])]
+         )
+-        self._update_currpos()
++        if fake_env:
++            # learner/fake env: no robot or franka_server -> placeholder proprio so __init__
++            # does NOT POST /getstate (which would hang without the server up).
++            self.currpos = np.concatenate(
++                [config.RESET_POSE[:3], euler_2_quat(config.RESET_POSE[3:])]
++            )
++            self.currvel = np.zeros(6)
++            self.currforce = np.zeros(3)
++            self.currtorque = np.zeros(3)
++            self.currjacobian = np.zeros((6, 7))
++            self.q = np.zeros(7)
++            self.dq = np.zeros(7)
++            self.curr_gripper_pos = np.zeros(1)
++        else:
++            self._update_currpos()
+         self.last_gripper_act = time.time()
+         self.lastsent = time.time()
+         self.randomreset = config.RANDOM_RESET
+@@ -109,6 +134,14 @@ class FrankaEnv(gym.Env):
+         self.random_rz_range = config.RANDOM_RZ_RANGE
+         self.hz = hz
+         self.joint_reset_cycle = config.JOINT_RESET_PERIOD  # reset the robot joint every 200 cycles
++        self.clearerr_on_pose = _env_flag("FRANKA_CLEARERR_ON_POSE", "0")
++        self.action_max_step = _env_float("FRANKA_ACTION_MAX_STEP", 0.0050)
++        self.action_max_rot_step = _env_float("FRANKA_ACTION_MAX_ROT_STEP", 0.045)
++        self.lock_rotation = _env_flag("FRANKA_LOCK_ROTATION", "1")
++        self.action_dbg_period = max(0.0, _env_float("FRANKA_ACTION_DBG_PERIOD", 1.0))
++        self.safety_dq_max = _env_float("FRANKA_SAFETY_DQ_MAX", _env_float("ACTOR_SAFETY_DQ_MAX", 0.35))
++        self.safety_force_max = _env_float("FRANKA_SAFETY_FORCE_MAX", _env_float("ACTOR_SAFETY_FORCE_MAX", 45.0))
++        self._last_action_dbg_t = 0.0
+ 
+         self.save_video = save_video
+         if self.save_video:
+@@ -146,7 +179,9 @@ class FrankaEnv(gym.Env):
+                     }
+                 ),
+                 "images": gym.spaces.Dict(
+-                    {key: gym.spaces.Box(0, 255, shape=(128, 128, 3), dtype=np.uint8) 
++                    {key: gym.spaces.Box(0, 255,
++                                        shape=(*getattr(config, "IMAGE_SIZES", {}).get(key, (128, 128))[::-1], 3),
++                                        dtype=np.uint8)
+                                 for key in config.REALSENSE_CAMERAS}
+                 ),
+             }
+@@ -210,14 +245,30 @@ class FrankaEnv(gym.Env):
+         """standard gym step function."""
+         start_time = time.time()
+         action = np.clip(action, self.action_space.low, self.action_space.high)
+-        xyz_delta = action[:3]
++        if self.lock_rotation and action.shape[0] >= 6:
++            action = action.copy()
++            action[3:6] = 0.0
++        xyz_delta = action[:3] * self.action_scale[:3]
++        rot_delta = action[3:6] * self.action_scale[3:6]
++
++        # Teach-aligned safety clamp: policy/human actions are normalized per-axis, but the
++        # controller sees a vector norm. Fresh random policy can otherwise command 0.026m +
++        # 0.173rad jumps every tick near j5≈0, which caused impedance ringing / 乱颤.
++        max_step = self.action_max_step
++        max_rot_step = self.action_max_rot_step
++        n = float(np.linalg.norm(xyz_delta))
++        if n > max_step:
++            xyz_delta = xyz_delta * (max_step / n)
++        nr = float(np.linalg.norm(rot_delta))
++        if nr > max_rot_step:
++            rot_delta = rot_delta * (max_rot_step / nr)
+ 
+         self.nextpos = self.currpos.copy()
+-        self.nextpos[:3] = self.nextpos[:3] + xyz_delta * self.action_scale[0]
++        self.nextpos[:3] = self.nextpos[:3] + xyz_delta
+ 
+         # GET ORIENTATION FROM ACTION
+         self.nextpos[3:] = (
+-            Rotation.from_rotvec(action[3:6] * self.action_scale[1])
++            Rotation.from_rotvec(rot_delta)
+             * Rotation.from_quat(self.currpos[3:])
+         ).as_quat()
+ 
+@@ -225,12 +276,34 @@ class FrankaEnv(gym.Env):
+ 
+         self._send_gripper_command(gripper_action)
+         self._send_pos_command(self.clip_safety_box(self.nextpos))
++        now = time.time()
++        if self.action_dbg_period and (now - self._last_action_dbg_t) >= self.action_dbg_period:
++            self._last_action_dbg_t = now
++            dq_max = float(np.max(np.abs(self.dq))) if hasattr(self, "dq") and self.dq is not None else float("nan")
++            force_norm = float(np.linalg.norm(self.currforce)) if hasattr(self, "currforce") and self.currforce is not None else float("nan")
++            print(
++                "[franka_step_dbg] "
++                f"act={np.asarray(action[:6]).round(3).tolist()} "
++                f"dxyz={np.asarray(xyz_delta).round(4).tolist()} "
++                f"drot={np.asarray(rot_delta).round(4).tolist()} "
++                f"sent_xyz={np.asarray(self.nextpos[:3]).round(4).tolist()} "
++                f"dq_max={dq_max:.4f} force_norm={force_norm:.2f} "
++                f"lock_rot={int(self.lock_rotation)} "
++                f"clearerr_on_pose={int(self.clearerr_on_pose)}",
++                flush=True,
++            )
+ 
+         self.curr_path_length += 1
+         dt = time.time() - start_time
+         time.sleep(max(0, (1.0 / self.hz) - dt))
+ 
+         self._update_currpos()
++        dq_max = float(np.max(np.abs(self.dq))) if self.dq is not None else 0.0
++        force_norm = float(np.linalg.norm(self.currforce)) if self.currforce is not None else 0.0
++        if dq_max > self.safety_dq_max:
++            raise RuntimeError(f"[franka_safety_fatal] dq_max={dq_max:.4f} > {self.safety_dq_max}")
++        if force_norm > self.safety_force_max:
++            raise RuntimeError(f"[franka_safety_fatal] force_norm={force_norm:.2f} > {self.safety_force_max}")
+         ob = self._get_obs()
+         reward = self.compute_reward(ob)
+         done = self.curr_path_length >= self.max_episode_length or reward or self.terminate
+@@ -416,7 +489,8 @@ class FrankaEnv(gym.Env):
+ 
+     def _send_pos_command(self, pos: np.ndarray):
+         """Internal function to send position command to the robot."""
+-        self._recover()
++        if self.clearerr_on_pose:
++            self._recover()
+         arr = np.array(pos).astype(np.float32)
+         data = {"arr": arr.tolist()}
+         requests.post(self.url + "pose", json=data)

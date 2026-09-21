@@ -1,6 +1,6 @@
 """A2/A7: sim/data/contract.py 单源真相断言.
 
-A2: 验证 STATE_KEYS_ORDERED / STATE_DIMS / STATE_DTYPE / ACTION_SCALE 等契约常量与 mainline 一致.
+A2: 验证 STATE_KEYS_ORDERED / STATE_DIMS / STATE_DTYPE / ACTION_SCALE 等契约常量与 live mainline 一致.
 A7: 验证 insertion detection thresholds (8mm/2mm/5°) 已在 contract 中持有.
 """
 import pytest
@@ -12,14 +12,14 @@ import pytest
 def test_state_keys_ordered_matches_mainline():
     from sim.data.contract import STATE_KEYS_ORDERED
     assert STATE_KEYS_ORDERED == (
-        "tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose",
+        "gripper_pose", "tcp_force", "tcp_pose", "tcp_torque", "tcp_vel",
     )
 
 
-def test_state_dims_is_25_pending_verify():
-    """STATE_DIMS 临时 hardcode = 25 与 wrapper.py 注释一致; VERIFY.md 待 hard-freeze 证据."""
+def test_state_dims_is_live_serl19():
+    """STATE_DIMS must match live SERLObsWrapper flat state."""
     from sim.data.contract import STATE_DIMS
-    assert STATE_DIMS == 25
+    assert STATE_DIMS == 19
 
 
 def test_state_dtype_is_float32():

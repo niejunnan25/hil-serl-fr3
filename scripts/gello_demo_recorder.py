@@ -95,6 +95,13 @@ def normalize_action(dxyz, drotvec, gripper_action, action_scale=ACTION_SCALE):
     return np.clip(a, -1.0, 1.0).astype(np.float32)
 
 
+def gripper_action_for_recording(gripper_closed, hold_grip_action=None):
+    """Return the recorded 7th action channel for a gripper state/mode."""
+    if hold_grip_action is not None:
+        return float(hold_grip_action)
+    return -1.0 if bool(gripper_closed) else 1.0
+
+
 def image_to_obs(frame_hwc, size=IMAGE_SIZE, bgr_to_rgb=True):
     """ZED frame -> (3,size,size) uint8 CHW (RGB).
 
@@ -249,7 +256,19 @@ CTRL_TIMEOUT = 0.5        # s, control-path HTTP timeout (fail fast, don't freez
 MAX_CONSEC_ERR = 30       # bail after this many consecutive failed ticks (~3s @ 10Hz)
 
 
-def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry_run):
+def run(
+    server,
+    hz,
+    duration,
+    out_dir,
+    max_step,
+    leader_scale,
+    gripper,
+    fps,
+    dry_run,
+    hold_grip_action=None,
+    return_result=False,
+):
     import signal
 
     from relative_teleop import _session, get_state, post_gripper, post_pose
@@ -331,7 +350,7 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry
                 nextpos, _step, applied_drotvec = apply_cartesian_delta(
                     currpos, dxyz, drotvec, max_step)
                 applied_dxyz = nextpos[:3] - currpos[:3]
-                gripper_pm = -1.0 if gripper_closed else 1.0
+                gripper_pm = gripper_action_for_recording(gripper_closed, hold_grip_action)
                 action = normalize_action(applied_dxyz, applied_drotvec, gripper_pm)
 
                 sf = cam_side.latest()
@@ -432,6 +451,9 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry
             raw_np["meta_leader_scale"] = float(leader_scale)
             raw_np["meta_max_step"] = float(max_step)
             raw_np["meta_dry_run"] = bool(dry_run)
+            raw_np["meta_hold_grip_action"] = (
+                np.nan if hold_grip_action is None else float(hold_grip_action)
+            )
             raw_np["meta_overruns"] = int(overruns)
             raw_np["meta_abort_reason"] = stop["reason"]
             ts_str = time.strftime("%Y%m%d_%H%M%S")
@@ -439,9 +461,19 @@ def run(server, hz, duration, out_dir, max_step, leader_scale, gripper, fps, dry
             print(f"[SAVE] transitions={n} validate={'PASS' if ok else 'FAIL'}: {msg}", flush=True)
             print(f"[SAVE] pkl={pkl}", flush=True)
             print(f"[SAVE] npz={npz}", flush=True)
+            result = {
+                "pkl": pkl,
+                "npz": npz,
+                "n_transitions": n,
+                "elapsed_s": float(elapsed),
+                "validate_ok": bool(ok),
+                "validate_msg": msg,
+                "abort_reason": stop["reason"],
+            }
         else:
             print("[SAVE] too few ticks; nothing saved.", flush=True)
-    return 0
+            result = None
+    return result if return_result else 0
 
 
 def main(argv=None):
@@ -457,9 +489,12 @@ def main(argv=None):
                    help="disable GELLO axis-7 -> FR3 gripper actuation")
     p.add_argument("--dry-run", action="store_true",
                    help="open cameras + read state + record, but never POST motion")
+    p.add_argument("--hold-grip-action", type=float, default=None,
+                   help="record this fixed gripper action channel, e.g. 0.0 for insert-only hold-grip")
     a = p.parse_args(argv)
     return run(a.server, a.hz, a.duration, a.out_dir, a.max_step,
-               a.leader_scale, a.gripper, a.fps, a.dry_run)
+               a.leader_scale, a.gripper, a.fps, a.dry_run,
+               hold_grip_action=a.hold_grip_action)
 
 
 if __name__ == "__main__":

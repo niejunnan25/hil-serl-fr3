@@ -29,9 +29,9 @@ except ImportError:
 def load_features(
     sim_pkl_path: str, real_pkl_path: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Load sim (reward=0) + real (80% pos) pkl, return X (N, 25) + y (N,).
+    """Load sim (reward=0) + real (80% pos) pkl, return X (N, state_dim) + y (N,).
 
-    Features: 25D state (no images).
+    Features: live flat state (no images).
     Labels: rewards (0.0 / 1.0).
     """
     def _load(p):

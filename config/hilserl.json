@@ -1,0 +1,16 @@
+{
+  "python": "/home/robot/miniconda3/envs/hilserl-fr3/bin/python",
+  "data_dir": "artifacts/runs",
+  "demo_dir": "demos/fixed_xyz_front_roi160_v1_20260920",
+  "action_contract": "fixed-xyz-v1",
+  "image_profile": "insert-front-roi160-v1",
+  "replay_buffer_capacity": 20000,
+  "checkpoint_keep": 5,
+  "batch_size": 128,
+  "seed_dataset_sha256": "8658e523aa4b65760eb5d6151187c4c552868d82bc5fdb7f1acd0976937ba09d",
+  "classifier_ckpt": "classifier_ckpt_wrist_scene_20260920",
+  "max_episode_steps": 190,
+  "control_hz": 10.0,
+  "min_free_gib": 8.0,
+  "classifier_image_key": "wrist_1"
+}

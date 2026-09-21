@@ -35,10 +35,20 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from experiments.plug_insertion.state_layout import tcp_pose_z
+from experiments.plug_insertion.success_gate import (
+    DEFAULT_CLASSIFIER_THRESHOLD,
+    DEFAULT_DEPTH_THRESHOLD,
+    DEFAULT_STREAK_REQUIRED,
+    SuccessStreak,
+    classify_success,
+)
+
 
 # ─── Success thresholds ──────────────────────────────────────────────────────
-CLASSIFIER_THRESHOLD = 0.7   # sigmoid output threshold
-Z_HEIGHT_THRESHOLD = 0.22    # plug must be below this z (m)
+CLASSIFIER_THRESHOLD = DEFAULT_CLASSIFIER_THRESHOLD
+Z_HEIGHT_THRESHOLD = DEFAULT_DEPTH_THRESHOLD
+SUCCESS_STREAK_REQUIRED = DEFAULT_STREAK_REQUIRED
 MAX_EPISODE_STEPS = 150      # matches EnvConfig.MAX_EPISODE_LENGTH
 
 
@@ -126,6 +136,11 @@ def run_episode(env, policy_fn, classifier_fn, episode_id: int):
     total_reward = 0.0
     success = False
     failure_reason = None
+    success_streak = SuccessStreak(
+        required=SUCCESS_STREAK_REQUIRED,
+        classifier_threshold=CLASSIFIER_THRESHOLD,
+        depth_threshold=Z_HEIGHT_THRESHOLD,
+    )
 
     for step in range(MAX_EPISODE_STEPS):
         # Get action from policy
@@ -134,10 +149,8 @@ def run_episode(env, policy_fn, classifier_fn, episode_id: int):
         # Step environment
         next_obs, reward, terminated, truncated, info = env.step(action)
 
-        # Get z-height from state vector
-        # state = [tcp_pose(6), tcp_vel(6), tcp_force(3), tcp_torque(3), gripper_pose(1)]
-        # tcp_pose = [x, y, z, roll, pitch, yaw]
-        z_height = float(obs["state"][0, 2]) if "state" in obs else 0.0
+        # Get z-height from SERLObsWrapper's gymnasium Dict flatten order.
+        z_height = tcp_pose_z(obs["state"]) if "state" in obs else 0.0
 
         # Check classifier for success
         classifier_logit = float(classifier_fn(obs))
@@ -156,12 +169,9 @@ def run_episode(env, policy_fn, classifier_fn, episode_id: int):
         steps_data.append(step_info)
         total_reward += float(reward)
 
-        # Check success: classifier says success AND z below threshold
-        if classifier_prob > CLASSIFIER_THRESHOLD and z_height < Z_HEIGHT_THRESHOLD:
-            success = True
-            # Continue recording but mark success
-            if step >= 5:  # require minimum steps to confirm
-                break
+        success = success_streak.update(classifier_prob=classifier_prob, depth=z_height)
+        if success:
+            break
 
         # Check failure conditions
         if terminated and not success:

@@ -36,6 +36,29 @@ except ImportError:
     sl = None  # type: ignore[assignment]
 
 
+ZED_EXPOSURE_AUTO = -1
+ZED_EXPOSURE_MIN = 0
+ZED_EXPOSURE_MAX = 100
+
+
+def validate_zed_exposure(exposure: Optional[int]) -> Optional[int]:
+    """Validate a ZED SDK exposure value.
+
+    ZED uses -1 for auto exposure, otherwise an integer percentage in [0, 100].
+    Values like 10500/13000 are RealSense-style microseconds and must not be
+    forwarded to the SDK.
+    """
+    if exposure is None:
+        return None
+    exposure = int(exposure)
+    if exposure == ZED_EXPOSURE_AUTO or ZED_EXPOSURE_MIN <= exposure <= ZED_EXPOSURE_MAX:
+        return exposure
+    raise ValueError(
+        "ZED exposure must be -1 for auto or an integer in [0, 100]; "
+        f"got {exposure}. Do not pass RealSense-style microsecond values."
+    )
+
+
 def _resolution_enum(dim: tuple[int, int]):
     """Map (width, height) to the closest sl.RESOLUTION constant."""
     if sl is None:
@@ -82,7 +105,7 @@ class ZEDCapture:
         self.serial_number = serial_number
         self.dim = dim
         self.fps = fps
-        self.exposure = exposure
+        self.exposure = validate_zed_exposure(exposure)
         self._cam: Optional[sl.Camera] = None
         self._runtime_params: Optional[sl.RuntimeParameters] = None
 
@@ -90,7 +113,12 @@ class ZEDCapture:
 
         # Set exposure if provided (after camera is opened)
         if self.exposure is not None and self._cam is not None:
-            self._cam.set_camera_settings(sl.VIDEO_SETTINGS.EXPOSURE, self.exposure)
+            status = self._cam.set_camera_settings(sl.VIDEO_SETTINGS.EXPOSURE, self.exposure)
+            if status is not None and status != sl.ERROR_CODE.SUCCESS:
+                raise RuntimeError(
+                    f"ZED camera '{self.name}' failed to set exposure "
+                    f"{self.exposure}: {status}"
+                )
 
     # ── public API (matches RSCapture) ─────────────────────────────────────
 
@@ -164,7 +192,8 @@ class ZEDCapture:
                 raise RuntimeError(
                     f"ZED camera '{self.name}': invalid resolution {self.dim}."
                 )
-            if status == sl.ERROR_CODE.CAMERA_ALREADY_OPENED:
+            already_opened = getattr(sl.ERROR_CODE, "CAMERA_ALREADY_OPENED", None)
+            if already_opened is not None and status == already_opened:
                 raise RuntimeError(
                     f"ZED camera '{self.name}' (serial {self.serial_number}) "
                     f"already opened by another process."

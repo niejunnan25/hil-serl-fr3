@@ -14,16 +14,19 @@ import pickle
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from sim.data.contract import IMAGE_SHAPE, STATE_DIMS
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 @pytest.fixture
 def sim_pkl_path():
-    """A9 风格的 sim pkl: 20 帧, 全 reward=0, 25D state, 3 image keys."""
+    """A9 风格的 sim pkl: 20 帧, 全 reward=0, live state, 3 image keys."""
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "sim.pkl")
         rng = np.random.default_rng(0)
@@ -76,7 +79,7 @@ def test_mixed_training_module_importable():
 
 
 # ---------------------------------------------------------------------------
-# 2) load_features: 加载 sim + real pkl, 返回 X (N, 25) + y (N,)
+# 2) load_features: 加载 sim + real pkl, 返回 X (N, STATE_DIMS) + y (N,)
 # ---------------------------------------------------------------------------
 def test_load_features_returns_xy(sim_pkl_path, mock_real_pkl_path):
     from sim.scripts.test_mixed_training import load_features
@@ -97,7 +100,9 @@ def test_load_features_returns_xy(sim_pkl_path, mock_real_pkl_path):
 # 3) train_classifier: 训练 LogisticRegression, 返回 model + predictions
 # ---------------------------------------------------------------------------
 def test_train_classifier_emits_predictions(sim_pkl_path, mock_real_pkl_path):
-    from sim.scripts.test_mixed_training import load_features, train_classifier
+    from sim.scripts.test_mixed_training import HAS_SKLEARN, load_features, train_classifier
+    if not HAS_SKLEARN:
+        pytest.skip("sklearn not installed in this runtime")
     X, y = load_features(sim_pkl_path, mock_real_pkl_path)
     model, X_test, y_test = train_classifier(X, y, max_iter=200, random_state=0)
     # model 必须 fit (能 predict)
@@ -112,8 +117,10 @@ def test_train_classifier_emits_predictions(sim_pkl_path, mock_real_pkl_path):
 # ---------------------------------------------------------------------------
 def test_compute_report_contains_required_keys(sim_pkl_path, mock_real_pkl_path):
     from sim.scripts.test_mixed_training import (
-        compute_report, load_features, train_classifier,
+        HAS_SKLEARN, compute_report, load_features, train_classifier,
     )
+    if not HAS_SKLEARN:
+        pytest.skip("sklearn not installed in this runtime")
     X, y = load_features(sim_pkl_path, mock_real_pkl_path)
     model, X_test, y_test = train_classifier(X, y, max_iter=200, random_state=0)
     preds = model.predict(X_test)
@@ -134,7 +141,9 @@ def test_compute_report_contains_required_keys(sim_pkl_path, mock_real_pkl_path)
 # 5) main() 跑通不 crash, exit 0 (smoke pass)
 # ---------------------------------------------------------------------------
 def test_main_runs_end_to_end(sim_pkl_path, mock_real_pkl_path, capsys):
-    from sim.scripts.test_mixed_training import main
+    from sim.scripts.test_mixed_training import HAS_SKLEARN, main
+    if not HAS_SKLEARN:
+        pytest.skip("sklearn not installed in this runtime")
     old_argv = sys.argv
     try:
         sys.argv = ["test_mixed_training.py", "--sim", sim_pkl_path, "--real", mock_real_pkl_path]
@@ -155,10 +164,13 @@ def test_main_runs_end_to_end(sim_pkl_path, mock_real_pkl_path, capsys):
 # ---------------------------------------------------------------------------
 def test_cli_subprocess_runs(sim_pkl_path, mock_real_pkl_path):
     """Simulating real CLI invocation."""
+    from sim.scripts.test_mixed_training import HAS_SKLEARN
+    if not HAS_SKLEARN:
+        pytest.skip("sklearn not installed in this runtime")
     result = subprocess.run(
         [sys.executable, "-m", "sim.scripts.test_mixed_training",
          "--sim", sim_pkl_path, "--real", mock_real_pkl_path],
-        cwd="/Users/tacyvan/Documents/Code/.claude/worktrees/wf_99662f87-b68-4/hilserl-fr3",
+        cwd=REPO_ROOT,
         capture_output=True, text=True, timeout=60,
     )
     # exit 0 = schema smoke pass (NOT accuracy-based)

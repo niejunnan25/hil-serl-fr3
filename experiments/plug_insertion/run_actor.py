@@ -43,6 +43,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from experiments.plug_insertion.config import TrainConfig, EnvConfig
 
 
+def _info_success(info: dict) -> bool:
+    """Return terminal success from either wrapper spelling."""
+    return bool(info.get("succeed", info.get("success", False)))
+
+
+def _resolve_eval_checkpoint_path(args) -> str:
+    if args.eval_checkpoint_path:
+        ckpt_path = args.eval_checkpoint_path
+        if not os.path.isabs(ckpt_path):
+            ckpt_path = os.path.join(PROJECT_ROOT, ckpt_path)
+        return ckpt_path
+    if args.eval_checkpoint_step is not None:
+        return os.path.join(PROJECT_ROOT, "checkpoints", f"actor_{args.eval_checkpoint_step}")
+    raise ValueError("eval checkpoint requires --eval_checkpoint_path or --eval_checkpoint_step")
+
+
 def build_agent(config: TrainConfig, env: gym.Env, seed: int = 42):
     """构建 SAC actor agent。
 
@@ -174,11 +190,9 @@ def run_eval_mode(args):
     )
 
     # Load checkpoint
-    ckpt_step = args.eval_checkpoint_step
-    ckpt_path = os.path.join(PROJECT_ROOT, "checkpoints", f"actor_{ckpt_step}")
-    if not os.path.exists(ckpt_path):
-        # 尝试不带 actor_ 前缀
-        ckpt_path = os.path.join(PROJECT_ROOT, "checkpoints", str(ckpt_step))
+    ckpt_path = _resolve_eval_checkpoint_path(args)
+    if args.eval_checkpoint_path is None and not os.path.exists(ckpt_path):
+        ckpt_path = os.path.join(PROJECT_ROOT, "checkpoints", str(args.eval_checkpoint_step))
 
     print(f"Loading checkpoint: {ckpt_path}")
     checkpointer = PyTreeCheckpointer()
@@ -204,7 +218,7 @@ def run_eval_mode(args):
             done = terminated or truncated
             ep_reward += float(reward)
 
-        success = info.get("success", False)
+        success = _info_success(info)
         if success:
             successes += 1
         print(f"  Episode {ep + 1}/{n_trajs}: reward={ep_reward:.3f} "
@@ -219,6 +233,7 @@ def main():
         description="HIL-SERL Actor — plug_insertion experiment"
     )
     parser.add_argument("--eval_mode", action="store_true", help="Run evaluation mode")
+    parser.add_argument("--eval_checkpoint_path", type=str, default=None, help="Checkpoint path for eval")
     parser.add_argument("--eval_checkpoint_step", type=int, default=None, help="Checkpoint step for eval")
     parser.add_argument("--eval_n_trajs", type=int, default=None, help="Number of eval trajectories")
     parser.add_argument("--learner_ip", type=str, default=None, help="Learner IP address")

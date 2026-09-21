@@ -6,8 +6,12 @@ Source of truth: sim/scenes/plug_scene.py line 122/127 已经用
 import os
 import pathlib
 
-REPO = pathlib.Path(os.environ.get("HILSERL_FR3_ROOT",
-    "/Users/tacyvan/Documents/Code/hilserl-fr3"))
+REPO = pathlib.Path(
+    os.environ.get(
+        "HILSERL_FR3_ROOT",
+        pathlib.Path(__file__).resolve().parents[3],
+    )
+)
 
 # A5 三个目标文件（字面替换范围）
 TARGET_FILES = (
