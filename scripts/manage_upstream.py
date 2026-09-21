@@ -49,9 +49,15 @@ def source_patch(root, repo, commit):
     actual = git(repo, "rev-parse", "HEAD").decode().strip()
     if actual != commit:
         raise ValueError(f"{repo}: HEAD {actual} differs from pinned {commit}")
+    baseline = set(git(repo, "ls-tree", "-r", "--name-only", "-z", commit).decode().split("\0"))
     tracked = git(repo, "ls-files", "-z").decode().split("\0")
     untracked = git(repo, "ls-files", "--others", "--exclude-standard", "-z").decode().split("\0")
-    paths = sorted({p for p in tracked + untracked if p and is_source(p)})
+    # Staged deletions disappear from ls-files but must still be removed from
+    # our baseline index. A staged addition already removed from disk, on the
+    # other hand, has no entry in the final source tree.
+    paths = sorted(p for p in baseline | set(tracked) | set(untracked)
+                   if p and is_source(p)
+                   and (p in baseline or (repo / p).exists() or (repo / p).is_symlink()))
     # A separate index captures additions/deletions, including empty files,
     # without changing the index or working files of the live dependency.
     with tempfile.TemporaryDirectory(prefix="upstream-index-", dir=root / ".git") as tmp:

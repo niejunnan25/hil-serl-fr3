@@ -86,6 +86,38 @@ class UpstreamManagementTest(unittest.TestCase):
         self.assertEqual(self.git(dep, "diff", "--cached"), "")
         self.manage("check", self.root)
 
+    def test_staged_deletion_is_exported_without_altering_real_index(self):
+        dep = self.root / "upstream/dep"
+        before = (self.root / "vendor/patches/dep.patch").read_bytes()
+        self.git(dep, "add", "-u")
+        staged = self.git(dep, "diff", "--cached")
+        self.manage("export", self.root)
+        self.assertEqual(before, (self.root / "vendor/patches/dep.patch").read_bytes())
+        self.assertEqual(staged, self.git(dep, "diff", "--cached"))
+        target = self.fresh()
+        self.manage("restore", target)
+        self.assertFalse((target / "upstream/dep/obsolete.py").exists())
+
+    def test_staged_rename_preserves_old_path_deletion(self):
+        dep = self.root / "upstream/dep"
+        self.git(dep, "mv", "module.py", "renamed.py")
+        self.manage("export", self.root)
+        target = self.fresh()
+        self.manage("restore", target)
+        self.assertFalse((target / "upstream/dep/module.py").exists())
+        self.assertEqual((target / "upstream/dep/renamed.py").read_text(), "VALUE = 2\n")
+
+    def test_staged_addition_removed_from_disk_is_not_exported(self):
+        dep = self.root / "upstream/dep"
+        before = (self.root / "vendor/patches/dep.patch").read_bytes()
+        added = dep / "removed_addition.py"
+        added.write_text("TEMP = True\n")
+        self.git(dep, "add", "removed_addition.py")
+        added.unlink()
+        self.manage("export", self.root)
+        self.assertEqual(before, (self.root / "vendor/patches/dep.patch").read_bytes())
+        self.assertIn("removed_addition.py", self.git(dep, "diff", "--cached", "--name-only"))
+
     def test_refuses_to_overwrite_unsaved_source(self):
         target = self.fresh()
         self.manage("restore", target)

@@ -8,6 +8,9 @@ permissions:
 jobs:
   dependency-patches:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GIT_TERMINAL_PROMPT: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,3 +18,7 @@ jobs:
           python-version: "3.10"
       - name: Verify patch export, restore, and checksums
         run: python -m unittest discover -s tests -p test_manage_upstream.py -v
+      - name: Restore all real pinned dependencies from upstream
+        run: |
+          python scripts/manage_upstream.py restore
+          python scripts/manage_upstream.py check
